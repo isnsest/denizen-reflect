@@ -49,4 +49,4 @@ task:
     script:
     - invoke player.kick()
     - invoke System.out.println("test")
-    - define my_variable "Something"
+    - define hello <invoke[new String("Hello")]>
