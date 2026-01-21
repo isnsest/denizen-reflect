@@ -45,6 +45,7 @@ public class DenizenReflect extends JavaPlugin {
             Debug.echoError("Failed to load external libraries for DenizenReflect:");
             Debug.echoError(e);
         }
+        register();
         new Thread(() -> {
 
             while (PreScriptReloadScriptEvent.instance == null
@@ -85,24 +86,7 @@ public class DenizenReflect extends JavaPlugin {
         return list;
     }
 
-    @Override
-    public void onEnable() {
-        instance = this;
-        saveDefaultConfig();
-
-        Debug.log("denizen-reflect", "Loading..");
-
-        metrics = new Metrics(this, 28366);
-        metrics.addCustomChart(
-                new Metrics.AdvancedPie("libraries", () -> {
-                    Map<String, Integer> data = new HashMap<>();
-                    for (String libraryName : LibraryLoader.libraries) {
-                        data.put(libraryName, 1);
-                    }
-                    return data;
-                })
-        );
-
+    private void register() {
         try {
             if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
                 DenizenCore.commandRegistry.registerCommand(PlaceholderCommand.class);
@@ -140,6 +124,25 @@ public class DenizenReflect extends JavaPlugin {
             Debug.echoError("Failed to register denizen-reflect components!");
             Debug.echoError(e.getMessage());
         }
+    }
+
+    @Override
+    public void onEnable() {
+        instance = this;
+        saveDefaultConfig();
+
+        Debug.log("denizen-reflect", "Loading..");
+
+        metrics = new Metrics(this, 28366);
+        metrics.addCustomChart(
+                new Metrics.AdvancedPie("libraries", () -> {
+                    Map<String, Integer> data = new HashMap<>();
+                    for (String libraryName : LibraryLoader.libraries) {
+                        data.put(libraryName, 1);
+                    }
+                    return data;
+                })
+        );
 
         Debug.log("denizen-reflect", "Loaded successfully!");
     }
