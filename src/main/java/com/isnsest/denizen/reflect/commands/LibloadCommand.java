@@ -15,7 +15,6 @@ public class LibloadCommand extends AbstractCommand {
         setName("libload");
         setSyntax("libload [<url>]");
         setRequiredArguments(1, 1);
-        isProcedural = true;
         autoCompile();
         registerTags();
     }

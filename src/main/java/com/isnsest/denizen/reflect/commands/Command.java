@@ -35,7 +35,6 @@ public class Command extends AbstractCommand {
         setName("command");
         setSyntax("command [create/delete/rename] [<command_name>] (with:<value>) (executor:{event}/<script>/<section>)");
         setRequiredArguments(2, 4);
-        isProcedural = false;
         autoCompile();
     }
 

@@ -16,7 +16,6 @@ public class EventCommand extends AbstractCommand {
         setName("event");
         setSyntax("event [rename] [<event_name>] [to:<new_event_name>]");
         setRequiredArguments(3, 3);
-        isProcedural = false;
         autoCompile();
     }
 

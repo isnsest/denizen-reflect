@@ -33,7 +33,6 @@ public class TagCommand extends AbstractCommand {
         setName("tag");
         setSyntax("tag [create/delete] [<tag_name>] (static) (in:<object_name>) (executor:{event}/<script>/<section>)");
         setRequiredArguments(2, 4);
-        isProcedural = false;
         autoCompile();
     }
 

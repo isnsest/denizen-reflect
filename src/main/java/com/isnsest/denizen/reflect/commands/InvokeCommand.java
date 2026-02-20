@@ -16,7 +16,6 @@ public class InvokeCommand extends AbstractCommand {
         setName("invoke");
         setSyntax("invoke [<java_expression>]");
         setRequiredArguments(1, 1);
-        isProcedural = true;
         autoCompile();
         registerTags();
     }

@@ -25,7 +25,6 @@ public class SectionCommand extends BracedCommand {
         setName("section");
         setSyntax("section (<definitions>) (as:<name>)");
         setRequiredArguments(0, 2);
-        isProcedural = false;
         autoCompile();
     }
 
