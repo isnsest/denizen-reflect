@@ -5,12 +5,6 @@ import com.denizenscript.denizencore.events.ScriptEvent;
 import com.denizenscript.denizencore.events.core.PreScriptReloadScriptEvent;
 import com.denizenscript.denizencore.events.core.ScriptGeneratesErrorScriptEvent;
 import com.denizenscript.denizencore.objects.ObjectFetcher;
-import com.denizenscript.denizencore.objects.ObjectTag;
-import com.denizenscript.denizencore.objects.core.ElementTag;
-import com.denizenscript.denizencore.objects.core.ListTag;
-import com.denizenscript.denizencore.objects.core.MapTag;
-import com.denizenscript.denizencore.tags.TagContext;
-import com.denizenscript.denizencore.tags.TagManager;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import com.isnsest.denizen.reflect.commands.*;
 import com.isnsest.denizen.reflect.util.ImportManager;
@@ -19,7 +13,6 @@ import com.isnsest.denizen.reflect.util.Metrics;
 import com.isnsest.denizen.reflect.events.CustomCommandEvent;
 import com.isnsest.denizen.reflect.events.CustomTagEvent;
 import com.isnsest.denizen.reflect.events.PlaceholderEvent;
-import meigo.denizen.DenizenTagFinder;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -58,72 +51,41 @@ public class DenizenReflect extends JavaPlugin {
 
             ImportManager.registerEventHooks();
             new Thread(() -> {
-                while (!Bukkit.getPluginManager().isPluginEnabled("dDiscordBot")) {
-                    try { Thread.sleep(1000); }
+                while (!Bukkit.getPluginManager().isPluginEnabled("dDiscordBot") && !isEnabled()) {
+                    try { Thread.sleep(100); }
                     catch (InterruptedException ignored) { return; }
                 }
-                metrics.addCustomChart(
-                        new Metrics.SimplePie("dDiscordBot", () -> Bukkit.getPluginManager().getPlugin("dDiscordBot").getDescription().getVersion())
-                );
-                metrics.addCustomChart(
-                        new Metrics.SimplePie("Denizen", () -> Bukkit.getPluginManager().getPlugin("Denizen").getDescription().getVersion())
-                );
+                if (Bukkit.getPluginManager().isPluginEnabled("dDiscordBot")) {
+                    metrics.addCustomChart(
+                            new Metrics.SimplePie("dDiscordBot", () -> Bukkit.getPluginManager().getPlugin("dDiscordBot").getDescription().getVersion())
+                    );
+                }
             }).start();
 
         }, "Denizen-Reflect-Init").start();
     }
 
-    public static ListTag getScriptTags(List<DenizenTagFinder.TagData> data, TagContext context, ObjectTag result) {
-        ListTag list = new ListTag();
-        for (DenizenTagFinder.TagData tag : data) {
-            MapTag map = new MapTag();
-            map.putObject("type", new ElementTag(tag.type));
-            map.putObject("value", new ElementTag(tag.value));
-            if (result != null) { map.putObject("result", result); }
-            if (tag.nested != null) { map.putObject("nested", getScriptTags(tag.nested, context, result)); }
-            list.addObject(map);
-        }
-        return list;
+    private void register() {
+        DenizenCore.commandRegistry.registerCommand(AsyncWhileCommand.class);
+        DenizenCore.commandRegistry.registerCommand(InvokeCommand.class);
+        DenizenCore.commandRegistry.registerCommand(TagCommand.class);
+        DenizenCore.commandRegistry.registerCommand(Command.class);
+        DenizenCore.commandRegistry.registerCommand(EventCommand.class);
+        DenizenCore.commandRegistry.registerCommand(SectionCommand.class);
+        DenizenCore.commandRegistry.registerCommand(ProxyCommand.class);
+
+        //
+
+        ScriptEvent.registerScriptEvent(CustomTagEvent.class);
+        ScriptEvent.registerScriptEvent(CustomCommandEvent.class);
     }
 
-    private void register() {
-        try {
-            if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
-                DenizenCore.commandRegistry.registerCommand(PlaceholderCommand.class);
-                ScriptEvent.registerScriptEvent(PlaceholderEvent.class);
-            }
-            DenizenCore.commandRegistry.registerCommand(AsyncWhileCommand.class);
-            DenizenCore.commandRegistry.registerCommand(InvokeCommand.class);
-            DenizenCore.commandRegistry.registerCommand(TagCommand.class);
-            DenizenCore.commandRegistry.registerCommand(Command.class);
-            DenizenCore.commandRegistry.registerCommand(EventCommand.class);
-            DenizenCore.commandRegistry.registerCommand(SectionCommand.class);
-            DenizenCore.commandRegistry.registerCommand(ProxyCommand.class);
-
-            //
-
-            ScriptEvent.registerScriptEvent(CustomTagEvent.class);
-            ScriptEvent.registerScriptEvent(CustomCommandEvent.class);
-
-            TagManager.registerTagHandler(ObjectTag.class, "chain", attribute -> {
-                String param = attribute.getRawParam();
-                ObjectTag result = null;
-                if (attribute.startsWith("index", 2)) {
-                    if (attribute.hasContext(2)) {
-                        if (attribute.getContextObject(2).toString().equals("2")) {
-                            result = attribute.getParamObject();
-                        };
-                        attribute.fulfill(1);
-                    }
-                }
-                return getScriptTags(DenizenTagFinder.findScriptTags(param), attribute.context, result);
-            });
-
+    private void postRegister() {
+        if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+            DenizenCore.commandRegistry.registerCommand(PlaceholderCommand.class);
+            ScriptEvent.registerScriptEvent(PlaceholderEvent.class);
         }
-        catch (Throwable e) {
-            Debug.echoError("Failed to register denizen-reflect components!");
-            Debug.echoError(e.getMessage());
-        }
+        DenizenCore.commandRegistry.registerCommand(LibloadCommand.class);
     }
 
     @Override
@@ -137,13 +99,17 @@ public class DenizenReflect extends JavaPlugin {
         metrics.addCustomChart(
                 new Metrics.AdvancedPie("libraries", () -> {
                     Map<String, Integer> data = new HashMap<>();
-                    for (String libraryName : LibraryLoader.libraries) {
+                    for (String libraryName : LibraryLoader.getLoadedLibraries()) {
                         data.put(libraryName, 1);
                     }
                     return data;
                 })
         );
+        metrics.addCustomChart(
+                new Metrics.SimplePie("Denizen", () -> Bukkit.getPluginManager().getPlugin("Denizen").getDescription().getVersion())
+        );
 
+        postRegister();
         Debug.log("denizen-reflect", "Loaded successfully!");
     }
 
