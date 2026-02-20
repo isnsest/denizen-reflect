@@ -31,6 +31,7 @@ public class LibloadCommand extends AbstractCommand {
     // Asynchronously downloads and injects a Java library (JAR file) from the specified URL into the plugin's classpath.
     // This allows scripts to utilize third-party dependencies or external APIs without requiring a server restart
     // or manual file placement.
+    // NOTE: Loads AFTER Denizen starts.
     //
     // @Tags
     // <util.libraries>
@@ -59,6 +60,7 @@ public class LibloadCommand extends AbstractCommand {
         // @description
         // Returns a list of all currently accessible JAR libraries.
         // This includes both preloaded dependencies and libraries injected via 'libload'.
+        // NOTE: Loads AFTER Denizen starts.
         // -->
         TagManager.baseTags.get("util").processor.registerTag(ListTag.class, "libraries", (attribute, object) -> {
             return new ListTag(LibraryLoader.getLoadedLibraries());
