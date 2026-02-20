@@ -58,7 +58,7 @@ dependencies {
 
 val buildNumber: String = System.getenv("BUILD_NUMBER") ?: project.property("BUILD_NUMBER") as String
 val buildDate: String = SimpleDateFormat("ddMMyyyy").format(Date())
-val pluginVersion = "2.2.5"
+val pluginVersion = "2.2.6"
 
 group = "isnsest"
 version = pluginVersion
