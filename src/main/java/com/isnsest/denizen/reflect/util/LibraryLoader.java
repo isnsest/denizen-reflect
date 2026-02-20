@@ -1,59 +1,95 @@
 package com.isnsest.denizen.reflect.util;
 
 import com.denizenscript.denizencore.utilities.debugging.Debug;
-import org.jetbrains.annotations.NotNull;
-
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.file.FileSystems;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.PathMatcher;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.file.*;
+import java.util.Collections;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 public class LibraryLoader {
-    private static ClassLoader classLoader = LibraryLoader.class.getClassLoader();
 
-    public static List<String> libraries = new ArrayList<>();
+    private static final DynamicClassLoader classLoader = new DynamicClassLoader(
+            new URL[0],
+            LibraryLoader.class.getClassLoader()
+    );
 
-    private static final PathMatcher MATCHER =
-            FileSystems.getDefault().getPathMatcher("glob:**/*.jar");
+    private static final Set<String> loadedLibraries = ConcurrentHashMap.newKeySet();
 
-    private static class LibraryVisitor extends SimpleFileVisitor<Path> {
-        private final List<URL> urls = new ArrayList<>();
+    public static void loadSingle(String urlString) {
+        String rawName = urlString.substring(urlString.lastIndexOf('/') + 1).split("[?#]")[0];
+        String libName = (rawName.endsWith(".jar") ? rawName : rawName + ".jar").replace(".jar", "");
 
-        @NotNull
-        @Override
-        public FileVisitResult visitFile(@NotNull Path file, @NotNull BasicFileAttributes attrs) throws IOException {
-            if (MATCHER.matches(file)) {
-                Debug.log("denizen-reflect", "Loaded external library " + file.getFileName());
-                urls.add(file.toUri().toURL());
-                libraries.add(file.getFileName().toString().replace(".jar", ""));
-            }
-            return super.visitFile(file, attrs);
+        if (loadedLibraries.contains(libName)) {
+            return;
         }
 
-        public URL[] getUrls() {
-            return urls.toArray(new URL[0]);
+        CompletableFuture.runAsync(() -> {
+            try {
+                URL url = URI.create(urlString).toURL();
+                Path tempJar = Files.createTempFile("reflect_", "_" + libName + ".jar");
+                tempJar.toFile().deleteOnExit();
+
+                try (InputStream in = url.openStream()) {
+                    Files.copy(in, tempJar, StandardCopyOption.REPLACE_EXISTING);
+                }
+
+                if (Files.size(tempJar) < 1024) {
+                    throw new IOException("Downloaded file is too small (invalid jar).");
+                }
+
+                registerLibrary(tempJar.toUri().toURL(), libName);
+                Debug.log("denizen-reflect", "Successfully imported: " + libName);
+
+            } catch (Exception e) {
+                Debug.echoError("Failed to import library: " + libName + " - " + e.getMessage());
+            }
+        });
+    }
+
+    public static void loadLibraries(Path folder) throws IOException {
+        if (!Files.exists(folder)) {
+            Files.createDirectories(folder);
+            return;
+        }
+
+        try (Stream<Path> stream = Files.walk(folder)) {
+            stream.filter(p -> p.toString().endsWith(".jar")).forEach(p -> {
+                try {
+                    registerLibrary(p.toUri().toURL(), p.getFileName().toString().replace(".jar", ""));
+                } catch (Exception ignored) {}
+            });
         }
     }
 
-    public static void loadLibraries(Path dataFolder) throws IOException {
-        if (Files.isDirectory(dataFolder)) {
-            LibraryVisitor visitor = new LibraryVisitor();
-            Files.walkFileTree(dataFolder, visitor);
-            classLoader = new URLClassLoader(visitor.getUrls(), LibraryLoader.class.getClassLoader());
-        } else {
-            Files.createDirectories(dataFolder);
+    private static void registerLibrary(URL url, String name) {
+        if (loadedLibraries.add(name)) {
+            classLoader.addURL(url);
         }
     }
 
     public static ClassLoader getClassLoader() {
         return classLoader;
+    }
+
+    public static Set<String> getLoadedLibraries() {
+        return Collections.unmodifiableSet(loadedLibraries);
+    }
+
+    private static class DynamicClassLoader extends URLClassLoader {
+        public DynamicClassLoader(URL[] urls, ClassLoader parent) {
+            super(urls, parent);
+        }
+
+        @Override
+        public void addURL(URL url) {
+            super.addURL(url);
+        }
     }
 }
