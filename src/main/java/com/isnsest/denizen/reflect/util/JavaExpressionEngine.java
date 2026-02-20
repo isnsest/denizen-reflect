@@ -1006,9 +1006,19 @@ public final class JavaExpressionEngine {
                     throw new NoSuchMethodException("Method " + name + " not found in " + owner.getName());
                 }
 
-                method.setAccessible(true);
+                Class<?> declaringClass = method.getDeclaringClass();
+
+                boolean isPublic = Modifier.isPublic(method.getModifiers()) &&
+                        Modifier.isPublic(declaringClass.getModifiers());
+
+                if (!isPublic) {
+                    try {
+                        method.setAccessible(true);
+                    } catch (Exception e) {
+                    }
+                }
+
                 handle = ROOT_LOOKUP.unreflect(method);
-                
                 METHOD_CACHE.put(key, handle);
             }
 
@@ -1105,6 +1115,11 @@ public final class JavaExpressionEngine {
         }
 
         static Method findMethodDeep(Class<?> type, String name, Object[] args) {
+
+            while (type != null && !java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
+                type = type.getSuperclass();
+            }
+            if (type == null) return null;
             
             for (Method m : type.getMethods()) {
                 if (m.getName().equals(name) && !m.isVarArgs() && isApplicable(m.getParameterTypes(), args, true)) return m;
