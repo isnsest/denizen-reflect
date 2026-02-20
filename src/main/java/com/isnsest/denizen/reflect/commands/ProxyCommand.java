@@ -24,6 +24,7 @@ import static com.isnsest.denizen.reflect.util.JavaExpressionEngine.resolveClass
 
 public class ProxyCommand extends AbstractCommand {
 
+    // @Plugin denizen-reflect
     public ProxyCommand() {
         setName("proxy");
         setSyntax("proxy [<interfaces>|...] (using:<map>) (as:<name>)");
@@ -167,7 +168,7 @@ public class ProxyCommand extends AbstractCommand {
                     queue.addDefinition("method", new ElementTag(methodName));
                     queue.start();
                 } else if (scriptName.getJavaObject() instanceof SectionCommand.Section section) {
-                    section.run(args);
+                    section.run(null, args);
                 } else {
                     Debug.echoError("Proxy handler refers to missing script: " + scriptName);
                     return null;

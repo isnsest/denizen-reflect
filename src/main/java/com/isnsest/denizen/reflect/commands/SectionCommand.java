@@ -1,6 +1,5 @@
 package com.isnsest.denizen.reflect.commands;
 
-import com.denizenscript.denizencore.objects.ObjectTag;
 import com.denizenscript.denizencore.objects.core.JavaReflectedObjectTag;
 import com.denizenscript.denizencore.objects.core.ListTag;
 import com.denizenscript.denizencore.objects.core.MapTag;
@@ -12,12 +11,10 @@ import com.denizenscript.denizencore.scripts.queues.ScriptQueue;
 import com.denizenscript.denizencore.scripts.commands.BracedCommand;
 import com.denizenscript.denizencore.tags.TagContext;
 import com.denizenscript.denizencore.utilities.ScriptUtilities;
-import com.denizenscript.denizencore.utilities.text.StringHolder;
 
 import static com.isnsest.denizen.reflect.util.JavaExpressionEngine.wrapObject;
 
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -44,8 +41,9 @@ public class SectionCommand extends BracedCommand {
     // A group of commands inside.
     //
     // @Usage
-    // - section:
-    //     - narrate 123
+    // - section text:
+    //     - narrate "<[text]>, <[2]>"
+    // - invoke section.run("Hello", "123")
     // -->
 
     public static class Section {
@@ -58,25 +56,24 @@ public class SectionCommand extends BracedCommand {
         public ListTag definitions;
 
         @SuppressWarnings("unused")
-        public void run(Object... def) {
+        public ScriptQueue run(ContextSource contextSource, Object... def) {
             Consumer<ScriptQueue> configure = (queue) -> {
-                for (Map.Entry<StringHolder, ObjectTag> object : defMap.entrySet()) {
-                    queue.addDefinition(object.getKey().toString(), object.getValue());
-                }
+                queue.definitions = defMap;
                 if (def != null) {
                     int i = 0;
                     for (Object object : def) {
-                        try {
-                            queue.addDefinition(definitions.get(i), wrapObject(object, context));
-                        } catch (Exception e) {
-                            queue.addDefinition(String.valueOf(i + 1), wrapObject(object, context));
-                        } i++;
+                        String key = definitions.get(i);
+                        queue.addDefinition(key != null ? key : String.valueOf(i + 1), wrapObject(object, context));
+                        i++;
                     }
                 }
             };
 
-            ScriptUtilities.createAndStartQueueArbitrary(queueId, directEntries, entryData, contextSource, configure);
+            if (contextSource == null) {
+                contextSource = this.contextSource;
+            }
 
+            return ScriptUtilities.createAndStartQueueArbitrary(queueId, directEntries, entryData, contextSource, configure);
         }
 
     }

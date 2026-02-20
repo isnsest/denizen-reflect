@@ -1,19 +1,25 @@
 package com.isnsest.denizen.reflect.commands;
 
+import com.denizenscript.denizen.objects.PlayerTag;
+import com.denizenscript.denizen.utilities.Utilities;
+import com.denizenscript.denizen.utilities.implementation.BukkitScriptEntryData;
 import com.denizenscript.denizencore.DenizenCore;
 import com.denizenscript.denizencore.exceptions.InvalidArgumentsException;
-import com.denizenscript.denizencore.exceptions.InvalidArgumentsRuntimeException;
 import com.denizenscript.denizencore.objects.Argument;
 import com.denizenscript.denizencore.objects.ArgumentHelper;
 import com.denizenscript.denizencore.objects.ObjectTag;
 import com.denizenscript.denizencore.objects.core.ElementTag;
 import com.denizenscript.denizencore.objects.core.MapTag;
 import com.denizenscript.denizencore.scripts.ScriptEntry;
+import com.denizenscript.denizencore.scripts.ScriptEntryData;
+import com.denizenscript.denizencore.scripts.ScriptRegistry;
 import com.denizenscript.denizencore.scripts.commands.AbstractCommand;
-import com.denizenscript.denizencore.scripts.commands.generator.ArgDefaultNull;
-import com.denizenscript.denizencore.scripts.commands.generator.ArgLinear;
-import com.denizenscript.denizencore.scripts.commands.generator.ArgName;
-import com.denizenscript.denizencore.scripts.commands.generator.ArgPrefixed;
+import com.denizenscript.denizencore.scripts.commands.generator.*;
+import com.denizenscript.denizencore.scripts.containers.ScriptContainer;
+import com.denizenscript.denizencore.scripts.containers.core.TaskScriptContainer;
+import com.denizenscript.denizencore.scripts.queues.ContextSource;
+import com.denizenscript.denizencore.scripts.queues.ScriptQueue;
+import com.denizenscript.denizencore.scripts.queues.core.InstantQueue;
 import com.denizenscript.denizencore.tags.TagManager;
 import com.denizenscript.denizencore.utilities.CoreUtilities;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
@@ -24,19 +30,20 @@ import java.util.*;
 @SuppressWarnings("unused")
 public class Command extends AbstractCommand {
 
+    // @Plugin denizen-reflect
     public Command() {
         setName("command");
-        setSyntax("command [create/delete/rename] [<command_name>] (with:<value>)");
-        setRequiredArguments(2, 3);
+        setSyntax("command [create/delete/rename] [<command_name>] (with:<value>) (executor:{event}/<script>/<section>)");
+        setRequiredArguments(2, 4);
         isProcedural = false;
         autoCompile();
     }
 
     // <--[command]
     // @Name Command
-    // @Syntax command [create/delete/rename] [<command_name>] (with:<value>)
+    // @Syntax command [create/delete/rename] [<command_name>] (with:<value>) (executor:{event}/<script>/<section>)
     // @Required 2
-    // @Maximum 3
+    // @Maximum 4
     // @Short Command manager.
     // @Group denizen-reflect
     // @Description
@@ -89,11 +96,14 @@ public class Command extends AbstractCommand {
     public static void autoExecute(ScriptEntry scriptEntry,
                                    @ArgName("action") @ArgLinear String action,
                                    @ArgName("command_name") @ArgLinear String commandName,
-                                   @ArgName("with") @ArgPrefixed @ArgDefaultNull ObjectTag with) {
+                                   @ArgName("with") @ArgPrefixed @ArgDefaultNull ObjectTag with,
+                                   @ArgName("executor") @ArgPrefixed @ArgDefaultText("event") ObjectTag executor) {
         switch (action) {
             case "create" -> {
                 DenizenCore.commandRegistry.instances.remove(commandName);
-                create(commandName, with, scriptEntry);
+                ScriptContainer scriptContainer = ScriptRegistry.getScriptContainer(executor.toString());
+                Object executorObj = Objects.requireNonNullElse(scriptContainer, executor.getJavaObject());
+                create(commandName, with, scriptEntry, executorObj);
             }
             case "delete" -> {
                 if (DenizenCore.commandRegistry.instances.remove(commandName) == null) {
@@ -121,9 +131,9 @@ public class Command extends AbstractCommand {
         }
     }
 
-    private static void create(String commandName, ObjectTag withObj, ScriptEntry contextEntry) {
+    private static void create(String commandName, ObjectTag withObj, ScriptEntry contextEntry, Object executor) {
         if (withObj == null) {
-            DenizenCore.commandRegistry.instances.put(commandName, new DynamicCommand(commandName, Collections.emptyList()));
+            DenizenCore.commandRegistry.instances.put(commandName, new DynamicCommand(commandName, Collections.emptyList(), executor));
             return;
         }
 
@@ -163,7 +173,7 @@ public class Command extends AbstractCommand {
             configList.add(new ArgConfig(type, name, tooltip, defaultValue));
         }
 
-        DenizenCore.commandRegistry.instances.put(commandName, new DynamicCommand(commandName, configList));
+        DenizenCore.commandRegistry.instances.put(commandName, new DynamicCommand(commandName, configList, executor));
     }
 
     private enum ArgType {
@@ -195,14 +205,16 @@ public class Command extends AbstractCommand {
             return isOptional() ? "(" + content + ")" : "[" + content + "]";
         }
     }
-
+    @SuppressWarnings("deprecation")
     private static class DynamicCommand extends AbstractCommand {
         private final String commandName;
         private final List<ArgConfig> argConfigs;
+        private final Object executor;
 
-        public DynamicCommand(String commandName, List<ArgConfig> argConfigs) {
+        public DynamicCommand(String commandName, List<ArgConfig> argConfigs, Object executor) {
             this.commandName = commandName;
             this.argConfigs = argConfigs;
+            this.executor = executor;
             this.setName(commandName);
             this.setParseArgs(false);
             this.isProcedural = false;
@@ -324,9 +336,30 @@ public class Command extends AbstractCommand {
 
         @Override
         public void execute(ScriptEntry scriptEntry) {
-            String event = CustomCommandEvent.runCustomCommand(scriptEntry, commandName);
-            if (event != null) {
-                throw new InvalidArgumentsRuntimeException(event);
+
+            ContextSource.SimpleMap contextSource = new ContextSource.SimpleMap();
+            contextSource.contexts = new HashMap<>();
+            contextSource.contexts.put("id", new ElementTag(commandName));
+
+            for (ArgConfig config : argConfigs) {
+                ObjectTag objectTag = scriptEntry.getObjectTag(config.name);
+                if (objectTag != null) {
+                    contextSource.contexts.put(config.name, objectTag);
+                }
+            }
+
+            if (executor.equals("event")) {
+                CustomCommandEvent.runCustomCommand(scriptEntry, commandName);
+            } else if (executor instanceof SectionCommand.Section section) {
+                ScriptQueue queue = section.run(contextSource);
+            } else if (executor instanceof TaskScriptContainer container) {
+                PlayerTag player = Utilities.getEntryPlayer(scriptEntry);
+                ScriptEntryData scriptEntryData = new BukkitScriptEntryData(player, null);
+                List<ScriptEntry> entries = container.getEntries(scriptEntryData, "script");
+                InstantQueue queue = new InstantQueue(container.getName());
+                queue.addEntries(entries);
+                queue.setContextSource(contextSource);
+                queue.start();
             }
         }
     }
