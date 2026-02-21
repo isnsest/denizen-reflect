@@ -65,7 +65,7 @@ public class PlaceholderCommand extends AbstractCommand implements Listener {
                                    @ArgName("placeholder") @ArgLinear String placeholder,
                                    @ArgName("author") @ArgPrefixed @ArgDefaultNull String author,
                                    @ArgName("version") @ArgPrefixed @ArgDefaultNull String version,
-                                   @ArgName("executor") @ArgPrefixed @ArgDefaultText("event") @ArgRaw String executorRaw) {
+                                   @ArgName("executor") @ArgPrefixed @ArgDefaultText("event") @ArgRaw @ArgNoDebug String executorRaw) {
 
         executorRaw = executorRaw.substring(executorRaw.indexOf(":") + 1);
         Object executorObj = TagManager.tagObject(executorRaw, scriptEntry.context).getJavaObject();
