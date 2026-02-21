@@ -99,7 +99,9 @@ public final class JavaExpressionEngine {
     }
 
     public static ObjectTag wrapObject(Object result, TagContext context) {
-        if (isSimple(result)) { return CoreUtilities.objectToTagForm(result, context); }
+        if (isSimple(result)) {
+            return CoreUtilities.objectToTagForm(result, context);
+        }
         return new JavaReflectedObjectTag(result);
     }
 
