@@ -1,7 +1,6 @@
 package com.isnsest.denizen.reflect.commands;
 
 import com.denizenscript.denizen.objects.PlayerTag;
-import com.denizenscript.denizen.utilities.Utilities;
 import com.denizenscript.denizen.utilities.implementation.BukkitScriptEntryData;
 import com.denizenscript.denizencore.objects.ObjectFetcher;
 import com.denizenscript.denizencore.objects.ObjectTag;
@@ -19,26 +18,27 @@ import com.denizenscript.denizencore.scripts.queues.core.InstantQueue;
 import com.denizenscript.denizencore.tags.Attribute;
 import com.denizenscript.denizencore.tags.ObjectTagProcessor;
 import com.denizenscript.denizencore.tags.TagManager;
+import com.denizenscript.denizencore.utilities.ScriptUtilities;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import com.isnsest.denizen.reflect.events.CustomTagEvent;
 
 import java.util.HashMap;
 import java.util.List;
-import java.util.Objects;
 
 public class TagCommand extends AbstractCommand {
 
     // @Plugin denizen-reflect
     public TagCommand() {
         setName("tag");
-        setSyntax("tag [create/delete] [<tag_name>] (static) (in:<object_name>) (executor:{event}/<script>/<section>)");
+        setSyntax("tag [create/delete] [<tag_name>] (static) (in:<object_name>) (executor:{event}/<script>/<section>/<tag>)");
         setRequiredArguments(2, 4);
+        setParseArgs(false);
         autoCompile();
     }
 
     // <--[command]
     // @Name Tag
-    // @Syntax tag [create/delete] [<tag_name>] (static) (in:<object_name>) (executor:{event}/<script>/<section>)
+    // @Syntax tag [create/delete] [<tag_name>] (static) (in:<object_name>) (executor:{event}/<script>/<section>/<tag>)
     // @Required 2
     // @Maximum 5
     // @Short Tag manager.
@@ -63,11 +63,20 @@ public class TagCommand extends AbstractCommand {
                             @ArgName("tag_name") @ArgLinear String tag_name,
                             @ArgName("static") boolean _static,
                             @ArgName("in") @ArgPrefixed @ArgDefaultText("null") String in,
-                            @ArgName("executor") @ArgPrefixed @ArgDefaultText("event") ObjectTag executor) {
-        ScriptContainer scriptContainer = ScriptRegistry.getScriptContainer(executor.toString());
-        Object executorObj = Objects.requireNonNullElse(scriptContainer, executor.getJavaObject());
+                            @ArgName("executor") @ArgPrefixed @ArgDefaultText("event") @ArgRaw @ArgNoDebug String executorRaw) {
+
+        executorRaw = executorRaw.substring(executorRaw.indexOf(":") + 1);
+        Object executorObj = TagManager.tagObject(executorRaw, scriptEntry.context).getJavaObject();
+        Object executor = executorRaw;
+        if (executorObj instanceof SectionCommand.Section section) {
+            executor = section;
+        } else if (ScriptRegistry.containsScript(executorRaw, TaskScriptContainer.class)) {
+            executor = ScriptRegistry.getScriptContainer(executorRaw);
+        }
+
         switch (action) {
             case "create":
+                Object finalExecutor = executor;
                 if (!in.equals("null")) {
                     try {
                         ObjectTagProcessor<? extends ObjectTag> processor = TagManager.baseTags.get(in).processor;
@@ -75,7 +84,7 @@ public class TagCommand extends AbstractCommand {
                             Debug.echoError("Tag '" + tag_name + "' already created in " + in);
                         } else {
                             processor.registerTagInternal(ObjectTag.class, tag_name, (attribute, object) -> {
-                                return execute(executorObj, scriptEntry, attribute, object, tag_name);
+                                return execute(finalExecutor, attribute, object, tag_name);
                             }, _static, new String[0]);
                         }
                     } catch (Exception e) {
@@ -86,7 +95,7 @@ public class TagCommand extends AbstractCommand {
                         Debug.echoError("Base Tag '" + tag_name + "' already created.");
                     } else {
                         TagManager.internalRegisterTagHandler(ObjectTag.class, tag_name, (attribute) -> {
-                            return execute(executorObj, scriptEntry, attribute, new ElementTag("null"), tag_name);
+                            return execute(finalExecutor, attribute, new ElementTag("null"), tag_name);
                         }, _static);
                     }
                 }
@@ -119,7 +128,6 @@ public class TagCommand extends AbstractCommand {
     }
 
     private static ObjectTag execute(Object executor,
-                                     ScriptEntry scriptEntry,
                                      Attribute attribute,
                                      ObjectTag object,
                                      String tag_name) {
@@ -134,21 +142,29 @@ public class TagCommand extends AbstractCommand {
         contextSource.contexts.put("param", attribute.getParamObject());
 
         if (executor.equals("event")) {
-            return CustomTagEvent.runCustomTag(scriptEntry.entryData, attribute, obj, tag_name).determination;
+            return CustomTagEvent.runCustomTag(attribute.context.getScriptEntryData(), attribute, obj, tag_name).determination;
         } else if (executor instanceof SectionCommand.Section section) {
+            section.entryData = attribute.context.getScriptEntryData();
             ScriptQueue queue = section.run(contextSource);
+            if (queue.determinations.isEmpty()) {
+                return null;
+            }
             return queue.determinations.getObject(queue.determinations.size() - 1);
         } else if (executor instanceof TaskScriptContainer container) {
-            PlayerTag player = Utilities.getEntryPlayer(scriptEntry);
+            PlayerTag player = ((BukkitScriptEntryData) attribute.context.getScriptEntryData()).getPlayer();
             ScriptEntryData scriptEntryData = new BukkitScriptEntryData(player, null);
             List<ScriptEntry> entries = container.getEntries(scriptEntryData, "script");
             InstantQueue queue = new InstantQueue(container.getName());
             queue.addEntries(entries);
             queue.setContextSource(contextSource);
             queue.start();
+            if (queue.determinations.isEmpty()) {
+                return null;
+            }
             return queue.determinations.getObject(queue.determinations.size() - 1);
+        } else {
+            return TagManager.tagObject(executor.toString(), attribute.context);
         }
-        return null;
     }
 
 }

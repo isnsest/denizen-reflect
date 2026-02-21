@@ -1,20 +1,21 @@
 package com.isnsest.denizen.reflect.commands;
 
 import com.denizenscript.denizen.objects.PlayerTag;
+import com.denizenscript.denizen.tags.BukkitTagContext;
 import com.denizenscript.denizen.utilities.implementation.BukkitScriptEntryData;
 import com.denizenscript.denizencore.exceptions.InvalidArgumentsRuntimeException;
-import com.denizenscript.denizencore.objects.ObjectTag;
 import com.denizenscript.denizencore.objects.core.ElementTag;
 import com.denizenscript.denizencore.scripts.ScriptEntry;
 import com.denizenscript.denizencore.scripts.ScriptEntryData;
 import com.denizenscript.denizencore.scripts.ScriptRegistry;
 import com.denizenscript.denizencore.scripts.commands.AbstractCommand;
 import com.denizenscript.denizencore.scripts.commands.generator.*;
-import com.denizenscript.denizencore.scripts.containers.ScriptContainer;
 import com.denizenscript.denizencore.scripts.containers.core.TaskScriptContainer;
 import com.denizenscript.denizencore.scripts.queues.ContextSource;
 import com.denizenscript.denizencore.scripts.queues.ScriptQueue;
 import com.denizenscript.denizencore.scripts.queues.core.InstantQueue;
+import com.denizenscript.denizencore.tags.TagContext;
+import com.denizenscript.denizencore.tags.TagManager;
 import me.clip.placeholderapi.events.ExpansionsLoadedEvent;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import com.isnsest.denizen.reflect.DenizenReflect;
@@ -27,7 +28,6 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.HashMap;
 import java.util.List;
-import java.util.Objects;
 
 public class PlaceholderCommand extends AbstractCommand implements Listener {
 
@@ -36,15 +36,16 @@ public class PlaceholderCommand extends AbstractCommand implements Listener {
     // @Plugin denizen-reflect
     public PlaceholderCommand() {
         setName("placeholder");
-        setSyntax("placeholder [create/delete] [<placeholder>] [author:<author>] [version:<version>] (executor:{event}/<script>/<section>)");
+        setSyntax("placeholder [create/delete] [<placeholder>] [author:<author>] [version:<version>] (executor:{event}/<script>/<section>/<tag>)");
         setRequiredArguments(2, 5);
+        setParseArgs(false);
         autoCompile();
         Bukkit.getPluginManager().registerEvents(this, DenizenReflect.getInstance());
     }
 
     // <--[command]
     // @Name Placeholder
-    // @Syntax placeholder [create/delete] [<placeholder>] [author:<author>] [version:<version>] (executor:{event}/<script>/<section>)
+    // @Syntax placeholder [create/delete] [<placeholder>] [author:<author>] [version:<version>] (executor:{event}/<script>/<section>/<tag>)
     // @Required 2
     // @Maximum 5
     // @Short Placeholder manager.
@@ -64,7 +65,17 @@ public class PlaceholderCommand extends AbstractCommand implements Listener {
                                    @ArgName("placeholder") @ArgLinear String placeholder,
                                    @ArgName("author") @ArgPrefixed @ArgDefaultNull String author,
                                    @ArgName("version") @ArgPrefixed @ArgDefaultNull String version,
-                                   @ArgName("executor") @ArgPrefixed @ArgDefaultText("event") ObjectTag executor) {
+                                   @ArgName("executor") @ArgPrefixed @ArgDefaultText("event") @ArgRaw String executorRaw) {
+
+        executorRaw = executorRaw.substring(executorRaw.indexOf(":") + 1);
+        Object executorObj = TagManager.tagObject(executorRaw, scriptEntry.context).getJavaObject();
+        Object executor = executorRaw;
+        if (executorObj instanceof SectionCommand.Section section) {
+            executor = section;
+        } else if (ScriptRegistry.containsScript(executorRaw, TaskScriptContainer.class)) {
+            executor = ScriptRegistry.getScriptContainer(executorRaw);
+        }
+
         switch (action) {
             case "create" -> {
                 if (author == null || version == null) {
@@ -74,9 +85,7 @@ public class PlaceholderCommand extends AbstractCommand implements Listener {
                 expansion.author = author;
                 expansion.identifier = placeholder;
                 expansion.version = version;
-
-                ScriptContainer scriptContainer = ScriptRegistry.getScriptContainer(executor.toString());
-                expansion.executor = Objects.requireNonNullElse(scriptContainer, executor.getJavaObject());
+                expansion.executor = executor;
 
                 expansion.register();
                 expansions.put(placeholder, expansion);
@@ -125,30 +134,37 @@ public class PlaceholderCommand extends AbstractCommand implements Listener {
 
         @Override
         public String onRequest(OfflinePlayer player, @NotNull String params) {
+
+            ContextSource.SimpleMap contextSource = new ContextSource.SimpleMap();
+            contextSource.contexts = new HashMap<>();
+            contextSource.contexts.put("id", new ElementTag(identifier));
+            contextSource.contexts.put("params", new ElementTag(params));
+
+            ScriptEntryData scriptEntryData = new BukkitScriptEntryData(new PlayerTag(player), null);
+
             if (executor.toString().equals("event")) {
                 return PlaceholderEvent.runPlaceholder(identifier, params, player);
             } else if (executor instanceof SectionCommand.Section section) {
-                ContextSource.SimpleMap contextSource = new ContextSource.SimpleMap();
-                contextSource.contexts = new HashMap<>();
-                contextSource.contexts.put("id", new ElementTag(identifier));
-                contextSource.contexts.put("params", new ElementTag(params));
-
+                section.entryData = scriptEntryData;
                 ScriptQueue queue = section.run(contextSource);
+                if (queue.determinations.isEmpty()) {
+                    return null;
+                }
                 return queue.determinations.getLast();
             } else if (executor instanceof TaskScriptContainer container) {
-                ScriptEntryData scriptEntryData = new BukkitScriptEntryData(new PlayerTag(player), null);
                 List<ScriptEntry> entries = container.getEntries(scriptEntryData, "script");
                 InstantQueue queue = new InstantQueue(container.getName());
                 queue.addEntries(entries);
-                queue.setContextSource(name -> switch (name) {
-                    case "id" -> new ElementTag(identifier);
-                    case "params" -> new ElementTag(params);
-                    default -> null;
-                });
+                queue.setContextSource(contextSource);
                 queue.start();
+                if (queue.determinations.isEmpty()) {
+                    return null;
+                }
                 return queue.determinations.getLast();
+            } else {
+                TagContext context = new BukkitTagContext(new PlayerTag(player), null, null);
+                return TagManager.tag(executor.toString(), context);
             }
-            return null;
         }
     }
 
