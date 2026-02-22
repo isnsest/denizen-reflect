@@ -62,8 +62,12 @@ public class LibraryLoader {
         try (Stream<Path> stream = Files.walk(folder)) {
             stream.filter(p -> p.toString().endsWith(".jar")).forEach(p -> {
                 try {
-                    registerLibrary(p.toUri().toURL(), p.getFileName().toString().replace(".jar", ""));
-                } catch (Exception ignored) {}
+                    String name = p.getFileName().toString().replace(".jar", "");
+                    registerLibrary(p.toUri().toURL(), name);
+                    Debug.log("denizen-reflect", "Loaded external library " + name);
+                } catch (Exception e) {
+                    Debug.echoError("Failed to load external library " + p.getFileName() + ": " + e.getMessage());
+                }
             });
         }
     }

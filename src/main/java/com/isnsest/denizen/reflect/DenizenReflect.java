@@ -31,6 +31,7 @@ public class DenizenReflect extends JavaPlugin {
 
     @Override
     public void onLoad() {
+        register();
         try {
             Path libsFolder = getDataFolder().toPath().resolve("libs");
             LibraryLoader.loadLibraries(libsFolder);
@@ -38,7 +39,6 @@ public class DenizenReflect extends JavaPlugin {
             Debug.echoError("Failed to load external libraries for DenizenReflect:");
             Debug.echoError(e);
         }
-        register();
         new Thread(() -> {
 
             while (PreScriptReloadScriptEvent.instance == null
@@ -50,17 +50,6 @@ public class DenizenReflect extends JavaPlugin {
             }
 
             ImportManager.registerEventHooks();
-            new Thread(() -> {
-                while (!Bukkit.getPluginManager().isPluginEnabled("dDiscordBot") && !isEnabled()) {
-                    try { Thread.sleep(100); }
-                    catch (InterruptedException ignored) { return; }
-                }
-                if (Bukkit.getPluginManager().isPluginEnabled("dDiscordBot")) {
-                    metrics.addCustomChart(
-                            new Metrics.SimplePie("dDiscordBot", () -> Bukkit.getPluginManager().getPlugin("dDiscordBot").getDescription().getVersion())
-                    );
-                }
-            }).start();
 
         }, "Denizen-Reflect-Init").start();
     }
@@ -107,6 +96,9 @@ public class DenizenReflect extends JavaPlugin {
         );
         metrics.addCustomChart(
                 new Metrics.SimplePie("Denizen", () -> Bukkit.getPluginManager().getPlugin("Denizen").getDescription().getVersion())
+        );
+        metrics.addCustomChart(
+                new Metrics.SimplePie("dDiscordBot", () -> Bukkit.getPluginManager().getPlugin("dDiscordBot").getDescription().getVersion())
         );
 
         postRegister();
