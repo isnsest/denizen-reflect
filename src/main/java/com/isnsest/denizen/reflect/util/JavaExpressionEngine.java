@@ -2,6 +2,8 @@ package com.isnsest.denizen.reflect.util;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.invoke.WrongMethodTypeException;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -11,12 +13,15 @@ import com.denizenscript.denizen.utilities.Utilities;
 import com.denizenscript.denizencore.objects.ObjectFetcher;
 import com.denizenscript.denizencore.objects.ObjectTag;
 import com.denizenscript.denizencore.objects.core.JavaReflectedObjectTag;
+import com.denizenscript.denizencore.objects.core.MapTag;
 import com.denizenscript.denizencore.scripts.ScriptEntry;
 import com.denizenscript.denizencore.tags.TagContext;
 import com.denizenscript.denizencore.tags.core.EscapeTagUtil;
 import com.denizenscript.denizencore.utilities.CoreUtilities;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import meigo.denizen.DenizenTagFinder;
+
+import static com.isnsest.denizen.reflect.util.JavaExpressionEngine.ReflectionUtil.EMPTY_ARRAY;
 
 public final class JavaExpressionEngine {
 
@@ -89,12 +94,26 @@ public final class JavaExpressionEngine {
         }
     }
 
+    private static final Map<Class<?>, Boolean> simpleClassCache = new ConcurrentHashMap<>();
+
     public static boolean isSimple(Object obj) {
         if (obj == null) return false;
-        if (obj instanceof ObjectTag) { return true; }
-        if (obj instanceof List || obj instanceof Map) { return true; }
-        if (obj.getClass() == Collections.EMPTY_SET.getClass()) return true;
-        if (obj.getClass().getName().startsWith("java.util.Collections$Unmodifiable")) { return true; }
+        Class<?> clazz = obj.getClass();
+
+        Boolean cached = simpleClassCache.get(clazz);
+        if (cached != null) return cached;
+
+        boolean result = calculateIsSimple(obj, clazz);
+        simpleClassCache.put(clazz, result);
+        return result;
+    }
+
+    private static boolean calculateIsSimple(Object obj, Class<?> clazz) {
+        if (obj instanceof ObjectTag) return true;
+        if (obj instanceof List || obj instanceof Map) return true;
+        if (clazz == Collections.EMPTY_SET.getClass()) return true;
+        String name = clazz.getName();
+        if (name.startsWith("java.util.Collections$Unmodifiable")) return true;
         return obj instanceof String || obj instanceof Number || obj instanceof Boolean;
     }
 
@@ -766,48 +785,73 @@ public final class JavaExpressionEngine {
     }
 
     private static final class VariableNode extends Node {
-        private final String originalName;
-        VariableNode(String name) { this.originalName = name; }
+        private final String unescapedName;
+        private final String lowerName;
+
+        private volatile Class<?> cachedClass = null;
+        private volatile boolean classLookupAttempted = false;
+
+        VariableNode(String name) {
+            this.unescapedName = unescape(name);
+            this.lowerName = this.unescapedName.toLowerCase();
+        }
 
         @Override
-        Object eval(EvalContext ctx) throws Throwable {
-            String name = unescape(this.originalName);
+        Object eval(EvalContext ctx) {
+            Object val = ctx.locals.get(unescapedName);
+            if (val != null) return val;
 
-            if (ctx.locals.containsKey(name)) {
-                return ctx.locals.get(name);
-            }
+            if (cachedClass != null) return cachedClass;
 
-            if (!name.contains("@")) {
-                Class<?> imported = ctx.imports.resolveType(name);
-                if (imported != null) return imported;
+            if (unescapedName.equals("player")) {
                 try {
-                    return resolveClass(name);
-                } catch (ClassNotFoundException ignored) {}
+                    return Utilities.getEntryPlayer(ctx.scriptEntry).getJavaObject();
+                } catch (Exception ignored) {}
             }
+            if (unescapedName.equals("scriptEntry")) return ctx.scriptEntry;
 
-            if (name.equals("player")) {
-                try { return Utilities.getEntryPlayer(ctx.scriptEntry).getJavaObject(); }
-                catch (Exception ignored) {}
-            }
-            if (name.equals("scriptEntry")) return ctx.scriptEntry;
-
-            try {
-                if (ctx.scriptEntry != null && ctx.scriptEntry.getResidingQueue() != null
-                        && ctx.scriptEntry.getResidingQueue().definitions.containsKey(name)) {
-                    return ctx.scriptEntry.getResidingQueue().getDefinitionObject(name).getJavaObject();
+            if (ctx.scriptEntry != null) {
+                if (ctx.scriptEntry.getResidingQueue() != null) {
+                    MapTag definitions = ctx.scriptEntry.getResidingQueue().getAllDefinitions();
+                    ObjectTag def = definitions.getObject(lowerName);
+                    if (def == null && !unescapedName.equals(lowerName)) {
+                        def = definitions.getObject(unescapedName);
+                    }
+                    if (def != null) return def.getJavaObject();
                 }
-                if (ctx.scriptEntry != null && ctx.scriptEntry.getContext() != null
-                        && ctx.scriptEntry.getContext().contextSource != null
-                        && ctx.scriptEntry.getContext().contextSource.getContext(name) != null)
-                { return ctx.scriptEntry.getContext().contextSource.getContext(name).getJavaObject(); }
-            } catch (Exception ignored) {}
+
+                if (ctx.scriptEntry.getContext() != null && ctx.scriptEntry.getContext().contextSource != null) {
+                    ObjectTag contextObj = ctx.scriptEntry.getContext().contextSource.getContext(unescapedName);
+                    if (contextObj == null && !unescapedName.equals(lowerName)) {
+                        contextObj = ctx.scriptEntry.getContext().contextSource.getContext(lowerName);
+                    }
+                    if (contextObj != null) return contextObj.getJavaObject();
+                }
+            }
+
+            if (!classLookupAttempted && !unescapedName.contains("@")) {
+                Class<?> cls = ctx.imports.resolveType(unescapedName);
+                if (cls == null) {
+                    try {
+                        cls = resolveClass(unescapedName);
+                    } catch (ClassNotFoundException ignored) {}
+                }
+                if (cls != null) {
+                    cachedClass = cls;
+                    return cls;
+                }
+                classLookupAttempted = true;
+            }
 
             try {
-                ObjectTag result = ObjectFetcher.pickObjectFor(name, ctx.scriptEntry.context);
-                return result.getJavaObject();
+                ObjectTag result = ObjectFetcher.pickObjectFor(unescapedName, ctx.scriptEntry.context);
+                if (result != null) {
+                    Object internal = result.getJavaObject();
+                    if (internal != null) return internal;
+                }
             } catch (Exception ignored) {}
 
-            return name;
+            return unescapedName;
         }
 
         static Object parseLiteral(Class<?> type, String text) {
@@ -845,40 +889,128 @@ public final class JavaExpressionEngine {
     private static final class NewNode extends Node {
         private final String typeName;
         private final List<Node> args;
-        NewNode(String typeName, List<Node> args) { this.typeName = typeName; this.args = args; }
+        private final int argCount;
+
+        private volatile Class<?> cachedType;
+        private volatile MethodHandle fastCtor;
+        private volatile Class<?>[] paramTypes;
+        private volatile boolean isVarargs;
+
+        NewNode(String typeName, List<Node> args) {
+            this.typeName = typeName;
+            this.args = args;
+            this.argCount = args.size();
+        }
 
         @Override
         Object eval(EvalContext ctx) throws Throwable {
-            Class<?> type = ctx.imports.resolveType(typeName);
-            if (type == null) type = resolveClass(typeName);
-            Object[] values = new Object[args.size()];
-            for (int i = 0; i < args.size(); i++) values[i] = args.get(i).eval(ctx);
-            return ReflectionUtil.construct(type, values);
+            Object[] values = (argCount == 0) ? ReflectionUtil.EMPTY_ARRAY : new Object[argCount];
+            for (int i = 0; i < argCount; i++) {
+                values[i] = args.get(i).eval(ctx);
+            }
+
+            if (fastCtor == null) {
+                synchronized (this) {
+                    if (fastCtor == null) {
+                        if (cachedType == null) {
+                            cachedType = ctx.imports.resolveType(typeName);
+                            if (cachedType == null) cachedType = resolveClass(typeName);
+                        }
+
+                        Constructor<?> ctor = ReflectionUtil.findConstructorDeep(cachedType, values);
+                        if (ctor == null) throw new NoSuchMethodException("No constructor for " + cachedType.getName());
+
+                        ctor.setAccessible(true);
+
+                        MethodHandle mh = MethodHandles.lookup().unreflectConstructor(ctor);
+                        this.paramTypes = ctor.getParameterTypes();
+                        this.isVarargs = ctor.isVarArgs();
+
+                        this.fastCtor = mh.asSpreader(Object[].class, paramTypes.length)
+                                .asType(MethodType.methodType(Object.class, Object[].class));
+                    }
+                }
+            }
+
+            Object[] adapted = ReflectionUtil.adaptArguments(paramTypes, values, isVarargs);
+
+            return fastCtor.invokeExact(adapted);
         }
     }
 
     private static final class FieldAccessNode extends Node {
         private final Node targetNode;
         private final String fieldName;
-        FieldAccessNode(Node targetNode, String fieldName) { this.targetNode = targetNode; this.fieldName = fieldName; }
+
+        private static final int PIC_SIZE = 3;
+        private final Class<?>[] cachedClasses = new Class<?>[PIC_SIZE];
+        private final MethodHandle[] cachedGetters = new MethodHandle[PIC_SIZE];
+        private final boolean[] isStaticField = new boolean[PIC_SIZE];
+
+        FieldAccessNode(Node targetNode, String fieldName) {
+            this.targetNode = targetNode;
+            this.fieldName = fieldName;
+        }
 
         @Override
         Object eval(EvalContext ctx) throws Throwable {
             Object base = targetNode.eval(ctx);
-            if (base instanceof String) {
-                String full = base + "." + fieldName;
-                try { return resolveClass(full); } catch (ClassNotFoundException ignored) { return full; }
-            }
-            if (base instanceof Class<?>) {
-                if (fieldName.startsWith("[") && fieldName.endsWith("]")) {
-                    return new BracketInitNode(new LiteralNode(base), fieldName.substring(1, fieldName.length()-1)).eval(ctx);
+
+            if (base instanceof String s) {
+                String full = s + "." + fieldName;
+                try {
+                    return resolveClass(full);
+                } catch (ClassNotFoundException ignored) {
+                    return full;
                 }
-                return ReflectionUtil.getField(base, fieldName);
             }
-            if (base != null) {
-                return ReflectionUtil.getField(base, fieldName);
+
+            if (base == null) {
+                throw new RuntimeException("Cannot access field '" + fieldName + "' on null target");
             }
-            throw new RuntimeException("Cannot access field '" + fieldName + "' on null target");
+
+            Class<?> currentClass = (base instanceof Class<?>) ? (Class<?>) base : base.getClass();
+
+            for (int i = 0; i < PIC_SIZE; i++) {
+                if (cachedClasses[i] == currentClass) {
+                    return isStaticField[i] ? cachedGetters[i].invokeExact() : cachedGetters[i].invokeExact(base);
+                }
+            }
+
+            synchronized (this) {
+                for (int i = 0; i < PIC_SIZE; i++) {
+                    if (cachedClasses[i] == currentClass) {
+                        return isStaticField[i] ? cachedGetters[i].invokeExact() : cachedGetters[i].invokeExact(base);
+                    }
+                }
+
+                Field f = ReflectionUtil.findFieldDeep(currentClass, fieldName);
+                if (f != null) {
+                    f.setAccessible(true);
+                    boolean isStat = Modifier.isStatic(f.getModifiers());
+                    MethodHandle mh = MethodHandles.lookup().unreflectGetter(f);
+
+                    MethodHandle finalHandle = mh.asType(isStat ?
+                            MethodType.methodType(Object.class) :
+                            MethodType.methodType(Object.class, Object.class));
+
+                    for (int i = 0; i < PIC_SIZE; i++) {
+                        if (cachedClasses[i] == null) {
+                            cachedClasses[i] = currentClass;
+                            cachedGetters[i] = finalHandle;
+                            isStaticField[i] = isStat;
+                            break;
+                        }
+                    }
+                    return isStat ? finalHandle.invokeExact() : finalHandle.invokeExact(base);
+                }
+            }
+
+            if (base instanceof Class<?> && fieldName.startsWith("[") && fieldName.endsWith("]")) {
+                return new BracketInitNode(new LiteralNode(base), fieldName.substring(1, fieldName.length() - 1)).eval(ctx);
+            }
+
+            return ReflectionUtil.getField(base, fieldName);
         }
     }
 
@@ -886,18 +1018,104 @@ public final class JavaExpressionEngine {
         private final Node target;
         private final String methodName;
         private final List<Node> args;
-        MethodCallNode(Node target, String methodName, List<Node> args) { this.target = target; this.methodName = methodName; this.args = args; }
+        private final int argCount;
+
+        private static final int PIC_SIZE = 3;
+        private final Class<?>[] cachedClasses = new Class<?>[PIC_SIZE];
+        private final MethodHandle[] cachedHandles = new MethodHandle[PIC_SIZE];
+        private final Class<?>[] paramTypesPerCache[] = new Class<?>[PIC_SIZE][];
+        private final boolean[] isVarargsPerCache = new boolean[PIC_SIZE];
+        private final boolean[] isStaticPerCache = new boolean[PIC_SIZE];
+
+        MethodCallNode(Node target, String methodName, List<Node> args) {
+            this.target = target;
+            this.methodName = methodName;
+            this.args = args;
+            this.argCount = args.size();
+        }
 
         @Override
         Object eval(EvalContext ctx) throws Throwable {
             Object obj = target.eval(ctx);
-            Object[] values = new Object[args.size()];
-            for (int i = 0; i < args.size(); i++) {
-                Object arg = args.get(i).eval(ctx);
-                if (arg instanceof String) arg = unescape((String) arg);
-                values[i] = arg;
+            if (obj == null) return null;
+
+            Class<?> currentClass = (obj instanceof Class) ? (Class<?>) obj : obj.getClass();
+
+            for (int i = 0; i < PIC_SIZE; i++) {
+                if (cachedClasses[i] == currentClass) {
+                    return invokeFromCache(i, obj, ctx);
+                }
             }
-            return ReflectionUtil.invokeMethod(obj, methodName, values);
+
+            return synchronizedLinkAndInvoke(currentClass, obj, ctx);
+        }
+
+        private Object invokeFromCache(int idx, Object obj, EvalContext ctx) throws Throwable {
+            MethodHandle handle = cachedHandles[idx];
+            boolean isStatic = isStaticPerCache[idx];
+
+            if (argCount == 0) {
+                return isStatic ? handle.invokeExact(EMPTY_ARRAY) : handle.invokeExact(obj, EMPTY_ARRAY);
+            }
+
+            Object[] values = new Object[argCount];
+            for (int i = 0; i < argCount; i++) {
+                Object val = args.get(i).eval(ctx);
+                if (val instanceof String s) {
+                    if (s.indexOf('ƈ') != -1 || s.indexOf('Ţ') != -1) {
+                        val = unescape(s);
+                    }
+                }
+                values[i] = val;
+            }
+
+            Object[] adapted = ReflectionUtil.adaptArguments(paramTypesPerCache[idx], values, isVarargsPerCache[idx]);
+
+            try {
+                return isStatic ? handle.invokeExact(adapted) : handle.invokeExact(obj, adapted);
+            } catch (WrongMethodTypeException e) {
+                cachedClasses[idx] = null;
+                throw e;
+            }
+        }
+
+        private synchronized Object synchronizedLinkAndInvoke(Class<?> clazz, Object obj, EvalContext ctx) throws Throwable {
+            Object[] values = new Object[argCount];
+            for (int i = 0; i < argCount; i++) values[i] = args.get(i).eval(ctx);
+
+            Method method = ReflectionUtil.findMethodDeep(clazz, methodName, values);
+            if (method == null) {
+                Debug.echoError("Method '" + methodName + "' not found in " + clazz.getSimpleName());
+                return null;
+            }
+
+            method.setAccessible(true);
+            MethodHandle baseHandle = MethodHandles.lookup().unreflect(method);
+
+            boolean isStatic = Modifier.isStatic(method.getModifiers());
+            Class<?>[] pTypes = method.getParameterTypes();
+            MethodHandle spreader = baseHandle.asSpreader(Object[].class, pTypes.length);
+
+            MethodHandle finalHandle;
+            if (isStatic) {
+                finalHandle = spreader.asType(MethodType.methodType(Object.class, Object[].class));
+            } else {
+                finalHandle = spreader.asType(MethodType.methodType(Object.class, Object.class, Object[].class));
+            }
+
+            for (int i = 0; i < PIC_SIZE; i++) {
+                if (cachedClasses[i] == null || i == PIC_SIZE - 1) {
+                    cachedClasses[i] = clazz;
+                    cachedHandles[i] = finalHandle;
+                    paramTypesPerCache[i] = pTypes;
+                    isVarargsPerCache[i] = method.isVarArgs();
+                    isStaticPerCache[i] = isStatic;
+                    break;
+                }
+            }
+
+            Object[] adapted = ReflectionUtil.adaptArguments(pTypes, values, method.isVarArgs());
+            return isStatic ? finalHandle.invokeExact(adapted) : finalHandle.invokeExact(obj, adapted);
         }
     }
 
@@ -925,6 +1143,9 @@ public final class JavaExpressionEngine {
         private static final Map<MemberKey, MethodHandle> METHOD_CACHE = new ConcurrentHashMap<>();
         private static final Map<MemberKey, MethodHandle> FIELD_CACHE = new ConcurrentHashMap<>();
         private static final Set<MemberKey> MISSING_MEMBERS = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+        private static final Map<Class<?>, Map<String, List<Method>>> METHODS_INDEX = new ConcurrentHashMap<>();
+        public static final Object[] EMPTY_ARRAY = new Object[0];
 
         private static final class MemberKey {
             final Class<?> clazz;
@@ -955,6 +1176,7 @@ public final class JavaExpressionEngine {
             METHOD_CACHE.clear();
             FIELD_CACHE.clear();
             MISSING_MEMBERS.clear();
+            METHODS_INDEX.clear();
         }
 
         private static void checkCacheSize() {
@@ -975,7 +1197,6 @@ public final class JavaExpressionEngine {
 
                 ctor.setAccessible(true);
                 handle = ROOT_LOOKUP.unreflectConstructor(ctor);
-                
                 METHOD_CACHE.put(key, handle);
             }
 
@@ -987,121 +1208,8 @@ public final class JavaExpressionEngine {
             return handle.invokeWithArguments(adaptedArgs);
         }
 
-        static Object invokeMethod(Object targetOrClass, String name, Object[] args) throws Throwable {
-            boolean isStatic = targetOrClass instanceof Class<?>;
-            Class<?> owner = isStatic ? (Class<?>) targetOrClass : targetOrClass.getClass();
-            Class<?>[] argTypes = getTypes(args);
-
-            MemberKey key = new MemberKey(owner, name, argTypes);
-
-            MethodHandle handle = METHOD_CACHE.get(key);
-
-            if (handle == null && MISSING_MEMBERS.contains(key)) {
-                throw new NoSuchMethodException("Method " + name + " not found (cached miss)");
-            }
-
-            if (handle == null) {
-                checkCacheSize();
-                Method method = findMethodDeep(owner, name, args);
-                if (method == null) {
-                    MISSING_MEMBERS.add(key);
-                    throw new NoSuchMethodException("Method " + name + " not found in " + owner.getName());
-                }
-
-                Class<?> declaringClass = method.getDeclaringClass();
-
-                boolean isPublic = Modifier.isPublic(method.getModifiers()) &&
-                        Modifier.isPublic(declaringClass.getModifiers());
-
-                if (!isPublic) {
-                    try {
-                        method.setAccessible(true);
-                    } catch (Exception e) {
-                    }
-                }
-
-                handle = ROOT_LOOKUP.unreflect(method);
-                METHOD_CACHE.put(key, handle);
-            }
-
-            MethodHandle invocationHandle;
-            if (isStatic) {
-                invocationHandle = handle;
-            } else {
-                invocationHandle = handle.bindTo(targetOrClass);
-            }
-
-            
-            
-            Class<?>[] paramTypes = invocationHandle.type().parameterArray();
-            boolean isVarargs = paramTypes.length > 0 && paramTypes[paramTypes.length - 1].isArray();
-
-            Object[] adaptedArgs = adaptArguments(paramTypes, args, isVarargs);
-            return invocationHandle.invokeWithArguments(adaptedArgs);
-        }
-
-        private static Object[] adaptArguments(Class<?>[] paramTypes, Object[] args, boolean isVarargs) {
-            if (!isVarargs) {
-                
-                Object[] out = new Object[paramTypes.length];
-                for (int i = 0; i < paramTypes.length; i++) {
-                    out[i] = adaptArgument(paramTypes[i], args[i]);
-                }
-                return out;
-            }
-
-            int fixedCount = paramTypes.length - 1;
-            Object[] out = new Object[paramTypes.length];
-
-            
-            for (int i = 0; i < fixedCount; i++) {
-                out[i] = adaptArgument(paramTypes[i], args[i]);
-            }
-
-            
-            Class<?> arrayType = paramTypes[fixedCount];
-            Class<?> componentType = arrayType.getComponentType();
-
-            
-            if (args.length == paramTypes.length && arrayType.isInstance(args[fixedCount])) {
-                out[fixedCount] = args[fixedCount];
-            }
-            
-            else {
-                int varArgsCount = args.length - fixedCount;
-                Object varArgsArray = Array.newInstance(componentType, Math.max(0, varArgsCount));
-
-                for (int i = 0; i < varArgsCount; i++) {
-                    Object val = adaptArgument(componentType, args[fixedCount + i]);
-                    Array.set(varArgsArray, i, val);
-                }
-                out[fixedCount] = varArgsArray;
-            }
-
-            return out;
-        }
-
-        static Object getField(Object targetOrClass, String name) throws Throwable {
-            boolean isStatic = targetOrClass instanceof Class<?>;
-            Class<?> owner = isStatic ? (Class<?>) targetOrClass : targetOrClass.getClass();
-
-            MemberKey key = new MemberKey(owner, name, null);
-            MethodHandle handle = FIELD_CACHE.get(key);
-
-            if (handle == null) {
-                checkCacheSize();
-                Field field = findFieldDeep(owner, name);
-                if (field == null) throw new NoSuchFieldException("Field " + name + " not found");
-
-                field.setAccessible(true);
-                handle = ROOT_LOOKUP.unreflectGetter(field);
-                FIELD_CACHE.put(key, handle);
-            }
-
-            return isStatic ? handle.invoke() : handle.invoke(targetOrClass);
-        }
-
         private static Class<?>[] getTypes(Object[] args) {
+            if (args == null || args.length == 0) return new Class[0];
             Class<?>[] types = new Class[args.length];
             for (int i = 0; i < args.length; i++) {
                 types[i] = args[i] == null ? null : args[i].getClass();
@@ -1109,45 +1217,47 @@ public final class JavaExpressionEngine {
             return types;
         }
 
-        static Field findFieldDeep(Class<?> type, String name) {
-            for (Class<?> c = type; c != null; c = c.getSuperclass()) {
-                try { return c.getDeclaredField(name); } catch (NoSuchFieldException ignored) {}
-            }
-            return null;
-        }
-
         static Method findMethodDeep(Class<?> type, String name, Object[] args) {
-
-            while (type != null && !java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
+            while (type != null && !Modifier.isPublic(type.getModifiers())) {
                 type = type.getSuperclass();
             }
             if (type == null) return null;
-            
-            for (Method m : type.getMethods()) {
-                if (m.getName().equals(name) && !m.isVarArgs() && isApplicable(m.getParameterTypes(), args, true)) return m;
-            }
-            
-            for (Method m : type.getMethods()) {
-                if (m.getName().equals(name) && m.isVarArgs() && isVarArgApplicable(m.getParameterTypes(), args, true)) return m;
-            }
-            
-            for (Method m : type.getMethods()) {
-                if (m.getName().equals(name) && !m.isVarArgs() && isApplicable(m.getParameterTypes(), args, false)) return m;
-            }
-            
-            for (Method m : type.getMethods()) {
-                if (m.getName().equals(name) && m.isVarArgs() && isVarArgApplicable(m.getParameterTypes(), args, false)) return m;
-            }
-            
-            for (Class<?> c = type; c != null; c = c.getSuperclass()) {
-                for (Method m : c.getDeclaredMethods()) {
-                    if (m.getName().equals(name)) {
-                        boolean v = m.isVarArgs();
-                        if (v ? isVarArgApplicable(m.getParameterTypes(), args, false) : isApplicable(m.getParameterTypes(), args, false)) {
-                            return m;
+
+            Map<String, List<Method>> methodsByName = METHODS_INDEX.computeIfAbsent(type, clz -> {
+                Map<String, List<Method>> map = new HashMap<>();
+
+                for (Method m : clz.getMethods()) {
+                    map.computeIfAbsent(m.getName(), k -> new ArrayList<>()).add(m);
+                }
+
+                for (Class<?> c = clz; c != null; c = c.getSuperclass()) {
+                    for (Method m : c.getDeclaredMethods()) {
+                        List<Method> list = map.computeIfAbsent(m.getName(), k -> new ArrayList<>());
+                        if (!list.contains(m)) {
+                            list.add(m);
                         }
                     }
                 }
+                return map;
+            });
+
+            List<Method> candidates = methodsByName.get(name);
+            if (candidates == null) return null;
+
+            for (Method m : candidates) if (!m.isVarArgs() && isApplicable(m.getParameterTypes(), args, true)) return m;
+
+            for (Method m : candidates) if (m.isVarArgs() && isVarArgApplicable(m.getParameterTypes(), args, true)) return m;
+
+            for (Method m : candidates) if (!m.isVarArgs() && isApplicable(m.getParameterTypes(), args, false)) return m;
+
+            for (Method m : candidates) if (m.isVarArgs() && isVarArgApplicable(m.getParameterTypes(), args, false)) return m;
+
+            return null;
+        }
+
+        static Field findFieldDeep(Class<?> type, String name) {
+            for (Class<?> c = type; c != null; c = c.getSuperclass()) {
+                try { return c.getDeclaredField(name); } catch (NoSuchFieldException ignored) {}
             }
             return null;
         }
@@ -1166,6 +1276,111 @@ public final class JavaExpressionEngine {
                 if (ctor.isVarArgs() && isVarArgApplicable(ctor.getParameterTypes(), args, false)) return ctor;
             }
             return null;
+        }
+
+        public static Object[] adaptArguments(Class<?>[] paramTypes, Object[] args, boolean isVarargs) {
+            int pLen = paramTypes.length;
+            if (pLen == 0) return EMPTY_ARRAY;
+
+            if (!isVarargs && args.length == pLen) {
+                boolean perfectMatch = true;
+                for (int i = 0; i < pLen; i++) {
+                    Object arg = args[i];
+                    Class<?> pType = paramTypes[i];
+
+                    if (arg == null) {
+                        if (pType.isPrimitive()) { perfectMatch = false; break; }
+                    } else {
+                        if (arg instanceof com.denizenscript.denizencore.objects.ObjectTag) {
+                            perfectMatch = false; break;
+                        }
+                        Class<?> argCls = arg.getClass();
+                        if (pType.isPrimitive()) {
+                            if (argCls != primitiveToWrapper(pType)) { perfectMatch = false; break; }
+                        } else if (!pType.isAssignableFrom(argCls)) {
+                            perfectMatch = false; break;
+                        }
+                    }
+                }
+                if (perfectMatch) return args;
+            }
+
+            if (!isVarargs) {
+                Object[] out = new Object[pLen];
+                for (int i = 0; i < pLen; i++) {
+                    out[i] = adaptArgument(paramTypes[i], args[i]);
+                }
+                return out;
+            }
+
+            int fixedCount = pLen - 1;
+            Object[] out = new Object[pLen];
+            for (int i = 0; i < fixedCount; i++) {
+                out[i] = adaptArgument(paramTypes[i], args[i]);
+            }
+
+            Class<?> arrayType = paramTypes[fixedCount];
+            Class<?> componentType = arrayType.getComponentType();
+
+            if (args.length == pLen && arrayType.isInstance(args[fixedCount])) {
+                out[fixedCount] = args[fixedCount];
+            } else {
+                int varArgsCount = Math.max(0, args.length - fixedCount);
+                Object varArgsArray = Array.newInstance(componentType, varArgsCount);
+                for (int i = 0; i < varArgsCount; i++) {
+                    Object val = adaptArgument(componentType, args[fixedCount + i]);
+                    Array.set(varArgsArray, i, val);
+                }
+                out[fixedCount] = varArgsArray;
+            }
+            return out;
+        }
+
+        public static Object adaptArgument(Class<?> paramType, Object arg) {
+            if (arg == null) return null;
+
+            if (arg instanceof Lambda && paramType.isInterface()) {
+                return createLambdaProxy(paramType, (Lambda) arg);
+            }
+
+            if (arg instanceof com.denizenscript.denizencore.objects.ObjectTag) {
+                Object javaObj = ((com.denizenscript.denizencore.objects.ObjectTag) arg).getJavaObject();
+                if (javaObj == null) return null;
+                if (paramType.isInstance(javaObj)) return javaObj;
+                return adaptArgument(paramType, javaObj);
+            }
+
+            if (paramType.isInstance(arg)) return arg;
+
+            if (arg instanceof String text) {
+                if (text.isEmpty()) return paramType == String.class ? "" : null;
+
+                if (paramType == boolean.class || paramType == Boolean.class)
+                    return text.equalsIgnoreCase("true") || text.equals("1");
+
+                if (paramType == char.class || paramType == Character.class)
+                    return text.charAt(0);
+
+                if (paramType.isEnum()) {
+                    try { return Enum.valueOf((Class<Enum>) paramType, text.trim()); } catch (Exception ignored) {}
+                }
+
+                if (Number.class.isAssignableFrom(primitiveToWrapper(paramType)))
+                    return convertToNumber(primitiveToWrapper(paramType), text.trim());
+            }
+
+            if (arg instanceof Number n) {
+                Class<?> wrapper = paramType.isPrimitive() ? primitiveToWrapper(paramType) : paramType;
+
+                if (wrapper == Float.class) return n.floatValue();
+                if (wrapper == Double.class) return n.doubleValue();
+                if (wrapper == Integer.class) return n.intValue();
+                if (wrapper == Long.class) return n.longValue();
+                if (wrapper == Short.class) return n.shortValue();
+                if (wrapper == Byte.class) return n.byteValue();
+            }
+
+            return arg;
         }
 
         static boolean isApplicable(Class<?>[] paramTypes, Object[] args, boolean strict) {
@@ -1191,11 +1406,7 @@ public final class JavaExpressionEngine {
         static boolean isArgApplicable(Class<?> p, Object arg, boolean strict) {
             if (arg == null) return !p.isPrimitive();
             if (arg instanceof Lambda) return p.isInterface();
-
-            if (arg instanceof ObjectTag) {
-                return isArgApplicable(p, ((ObjectTag) arg).getJavaObject(), strict);
-            }
-
+            if (arg instanceof ObjectTag) return isArgApplicable(p, ((ObjectTag) arg).getJavaObject(), strict);
             if (p.isInstance(arg)) return true;
 
             if (p.isPrimitive()) {
@@ -1211,97 +1422,40 @@ public final class JavaExpressionEngine {
                 if (p.isEnum()) return true;
                 if (isNumberType(p)) return isParsableNumber((String)arg);
             }
-            if (arg instanceof Number && !strict) {
-                return isNumberType(p);
-            }
+            if (arg instanceof Number && !strict) return isNumberType(p);
             return false;
+        }
+
+        private static boolean isParsableNumber(String s) {
+            if (s == null || s.isEmpty()) return false;
+            int len = s.length();
+            int start = (s.charAt(0) == '-' || s.charAt(0) == '+') ? 1 : 0;
+            if (start == len) return false;
+
+            boolean hasDot = false;
+            boolean hasDigit = false;
+            for (int i = start; i < len; i++) {
+                char c = s.charAt(i);
+                if (c == '.') {
+                    if (hasDot) return false;
+                    hasDot = true;
+                } else if (c == 'e' || c == 'E') {
+                    return isParsableNumber(s.substring(i + 1));
+                } else if (c < '0' || c > '9') {
+                    if (i == len - 1 && (c == 'f' || c == 'F' || c == 'd' || c == 'D' || c == 'l' || c == 'L')) {
+                        return hasDigit;
+                    }
+                    return false;
+                } else {
+                    hasDigit = true;
+                }
+            }
+            return hasDigit;
         }
 
         private static boolean isNumberType(Class<?> p) {
             Class<?> w = p.isPrimitive() ? primitiveToWrapper(p) : p;
             return Number.class.isAssignableFrom(w);
-        }
-
-        private static boolean isParsableNumber(String s) {
-            try { Double.parseDouble(s); return true; } catch(Exception e) { return false; }
-        }
-
-        public static Object adaptArgument(Class<?> paramType, Object arg) {
-            if (arg instanceof Lambda && paramType.isInterface()) {
-                return createLambdaProxy(paramType, (Lambda) arg);
-            }
-            if (arg == null) return null;
-
-            if (arg instanceof ObjectTag) {
-                Object javaObj = ((ObjectTag) arg).getJavaObject();
-                if (paramType.isInstance(javaObj)) return javaObj;
-                return adaptArgument(paramType, javaObj);
-            }
-
-            if (arg instanceof String s) {
-                String text = s.trim();
-                if (paramType == boolean.class || paramType == Boolean.class) return text.equalsIgnoreCase("true") || text.equals("1");
-                if (paramType == char.class || paramType == Character.class) return text.isEmpty() ? '\0' : text.charAt(0);
-                if (paramType.isEnum()) {
-                    try { return Enum.valueOf((Class<Enum>) paramType, text); } catch (Exception ignored) {}
-                }
-                if (Number.class.isAssignableFrom(primitiveToWrapper(paramType))) return convertToNumber(primitiveToWrapper(paramType), text);
-            }
-
-            if (paramType.isPrimitive()) {
-                Class<?> wrapper = primitiveToWrapper(paramType);
-                if (wrapper.isInstance(arg)) return arg;
-                if (arg instanceof Number n) {
-                    if (paramType == int.class) return n.intValue();
-                    if (paramType == long.class) return n.longValue();
-                    if (paramType == double.class) return n.doubleValue();
-                    if (paramType == float.class) return n.floatValue();
-                    if (paramType == short.class) return n.shortValue();
-                    if (paramType == byte.class) return n.byteValue();
-                }
-            }
-
-            if (Number.class.isAssignableFrom(paramType) && arg instanceof Number n) {
-                if (paramType == Integer.class) return n.intValue();
-                if (paramType == Long.class) return n.longValue();
-                if (paramType == Double.class) return n.doubleValue();
-                if (paramType == Float.class) return n.floatValue();
-                if (paramType == Short.class) return n.shortValue();
-                if (paramType == Byte.class) return n.byteValue();
-            }
-
-            return arg;
-        }
-
-        private static Object createLambdaProxy(Class<?> interfaceType, Lambda lambda) {
-            return Proxy.newProxyInstance(
-                    LibraryLoader.getClassLoader(),
-                    new Class<?>[]{interfaceType},
-                    (proxy, method, args) -> {
-                        if (method.getDeclaringClass() == Object.class) {
-                            if (method.getName().equals("toString")) return "LambdaProxy";
-                            if (method.getName().equals("hashCode")) return System.identityHashCode(proxy);
-                            if (method.getName().equals("equals")) return proxy == args[0];
-                        }
-
-                        Map<String, Object> localVars = new HashMap<>(lambda.closureContext.locals);
-
-                        if (args != null) {
-                            for (int i = 0; i < args.length && i < lambda.paramNames.size(); i++) {
-                                localVars.put(lambda.paramNames.get(i), args[i]);
-                            }
-                        }
-
-                        EvalContext newCtx = new EvalContext(
-                                lambda.closureContext.imports,
-                                lambda.closureContext.scriptEntry,
-                                localVars
-                        );
-
-                        Object result = lambda.body.eval(newCtx);
-                        return adaptArgument(method.getReturnType(), result);
-                    }
-            );
         }
 
         static Class<?> primitiveToWrapper(Class<?> primitive) {
@@ -1326,6 +1480,45 @@ public final class JavaExpressionEngine {
                 if (type == Byte.class) return Byte.parseByte(text);
             } catch (Exception ignored) {}
             return null;
+        }
+
+        private static Object createLambdaProxy(Class<?> interfaceType, Lambda lambda) {
+            return Proxy.newProxyInstance(
+                    LibraryLoader.getClassLoader(),
+                    new Class<?>[]{interfaceType},
+                    (proxy, method, args) -> {
+                        if (method.getDeclaringClass() == Object.class) {
+                            if (method.getName().equals("toString")) return "LambdaProxy";
+                            if (method.getName().equals("hashCode")) return System.identityHashCode(proxy);
+                            if (method.getName().equals("equals")) return proxy == args[0];
+                        }
+                        Map<String, Object> localVars = new HashMap<>(lambda.closureContext.locals);
+                        if (args != null) {
+                            for (int i = 0; i < args.length && i < lambda.paramNames.size(); i++) {
+                                localVars.put(lambda.paramNames.get(i), args[i]);
+                            }
+                        }
+                        EvalContext newCtx = new EvalContext(lambda.closureContext.imports, lambda.closureContext.scriptEntry, localVars);
+                        Object result = lambda.body.eval(newCtx);
+                        return adaptArgument(method.getReturnType(), result);
+                    }
+            );
+        }
+
+        static Object getField(Object targetOrClass, String name) throws Throwable {
+            boolean isStatic = targetOrClass instanceof Class<?>;
+            Class<?> owner = isStatic ? (Class<?>) targetOrClass : targetOrClass.getClass();
+            MemberKey key = new MemberKey(owner, name, null);
+            MethodHandle handle = FIELD_CACHE.get(key);
+            if (handle == null) {
+                checkCacheSize();
+                Field field = findFieldDeep(owner, name);
+                if (field == null) throw new NoSuchFieldException("Field " + name + " not found");
+                field.setAccessible(true);
+                handle = ROOT_LOOKUP.unreflectGetter(field);
+                FIELD_CACHE.put(key, handle);
+            }
+            return isStatic ? handle.invoke() : handle.invoke(targetOrClass);
         }
     }
 }
