@@ -163,6 +163,7 @@ public class PlaceholderCommand extends AbstractCommand implements Listener {
                 return queue.determinations.getLast();
             } else {
                 TagContext context = new BukkitTagContext(new PlayerTag(player), null, null);
+                context.debug = false;
                 return TagManager.tag(executor.toString(), context);
             }
         }
