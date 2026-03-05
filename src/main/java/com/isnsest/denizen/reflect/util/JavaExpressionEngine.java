@@ -72,13 +72,15 @@ public final class JavaExpressionEngine {
             path = path.substring(scriptIdx + "scripts/".length());
         }
 
-        List<String> tags = DenizenTagFinder.findTags(expression);
-        if (!tags.isEmpty()) {
-            for (String string : tags) {
-                expression = expression.replace(string, EscapeTagUtil.escape(string)
-                        .replace(",", "ƈ")
-                        .replace("-", "Ţ")
-                );
+        if (expression.indexOf('<') != -1 && expression.indexOf('>') != -1) {
+            List<String> tags = DenizenTagFinder.findTags(expression);
+            if (!tags.isEmpty()) {
+                for (String string : tags) {
+                    expression = expression.replace(string, EscapeTagUtil.escape(string)
+                            .replace(",", "ƈ")
+                            .replace("-", "Ţ")
+                    );
+                }
             }
         }
 
@@ -812,10 +814,9 @@ public final class JavaExpressionEngine {
 
             if (ctx.scriptEntry != null) {
                 if (ctx.scriptEntry.getResidingQueue() != null) {
-                    MapTag definitions = ctx.scriptEntry.getResidingQueue().getAllDefinitions();
-                    ObjectTag def = definitions.getObject(lowerName);
+                    ObjectTag def = ctx.scriptEntry.getResidingQueue().getDefinitionObject(unescapedName);
                     if (def == null && !unescapedName.equals(lowerName)) {
-                        def = definitions.getObject(unescapedName);
+                        def = ctx.scriptEntry.getResidingQueue().getDefinitionObject(lowerName);
                     }
                     if (def != null) return def.getJavaObject();
                 }
@@ -947,6 +948,10 @@ public final class JavaExpressionEngine {
         private final MethodHandle[] cachedGetters = new MethodHandle[PIC_SIZE];
         private final boolean[] isStaticField = new boolean[PIC_SIZE];
 
+        private Class<?> monoClass;
+        private MethodHandle monoHandle;
+        private boolean monoIsStatic;
+
         FieldAccessNode(Node targetNode, String fieldName) {
             this.targetNode = targetNode;
             this.fieldName = fieldName;
@@ -971,6 +976,10 @@ public final class JavaExpressionEngine {
 
             Class<?> currentClass = (base instanceof Class<?>) ? (Class<?>) base : base.getClass();
 
+            if (currentClass == monoClass) {
+                return monoIsStatic ? monoHandle.invokeExact() : monoHandle.invokeExact(base);
+            }
+
             for (int i = 0; i < PIC_SIZE; i++) {
                 if (cachedClasses[i] == currentClass) {
                     return isStaticField[i] ? cachedGetters[i].invokeExact() : cachedGetters[i].invokeExact(base);
@@ -978,6 +987,9 @@ public final class JavaExpressionEngine {
             }
 
             synchronized (this) {
+                if (currentClass == monoClass) {
+                    return monoIsStatic ? monoHandle.invokeExact() : monoHandle.invokeExact(base);
+                }
                 for (int i = 0; i < PIC_SIZE; i++) {
                     if (cachedClasses[i] == currentClass) {
                         return isStaticField[i] ? cachedGetters[i].invokeExact() : cachedGetters[i].invokeExact(base);
@@ -1002,6 +1014,11 @@ public final class JavaExpressionEngine {
                             break;
                         }
                     }
+
+                    this.monoHandle = finalHandle;
+                    this.monoIsStatic = isStat;
+                    this.monoClass = currentClass;
+
                     return isStat ? finalHandle.invokeExact() : finalHandle.invokeExact(base);
                 }
             }
@@ -1022,10 +1039,7 @@ public final class JavaExpressionEngine {
 
         private static final int PIC_SIZE = 3;
         private final Class<?>[] cachedClasses = new Class<?>[PIC_SIZE];
-        private final MethodHandle[] cachedHandles = new MethodHandle[PIC_SIZE];
-        private final Class<?>[] paramTypesPerCache[] = new Class<?>[PIC_SIZE][];
-        private final boolean[] isVarargsPerCache = new boolean[PIC_SIZE];
-        private final boolean[] isStaticPerCache = new boolean[PIC_SIZE];
+        private final Method[] cachedMethods = new Method[PIC_SIZE];
 
         MethodCallNode(Node target, String methodName, List<Node> args) {
             this.target = target;
@@ -1039,83 +1053,67 @@ public final class JavaExpressionEngine {
             Object obj = target.eval(ctx);
             if (obj == null) return null;
 
-            Class<?> currentClass = (obj instanceof Class) ? (Class<?>) obj : obj.getClass();
-
-            for (int i = 0; i < PIC_SIZE; i++) {
-                if (cachedClasses[i] == currentClass) {
-                    return invokeFromCache(i, obj, ctx);
-                }
-            }
-
-            return synchronizedLinkAndInvoke(currentClass, obj, ctx);
-        }
-
-        private Object invokeFromCache(int idx, Object obj, EvalContext ctx) throws Throwable {
-            MethodHandle handle = cachedHandles[idx];
-            boolean isStatic = isStaticPerCache[idx];
-
             if (argCount == 0) {
-                return isStatic ? handle.invokeExact(EMPTY_ARRAY) : handle.invokeExact(obj, EMPTY_ARRAY);
+                return callZeroArg(obj);
             }
+
+            Class<?> currentClass = (obj instanceof Class) ? (Class<?>) obj : obj.getClass();
 
             Object[] values = new Object[argCount];
             for (int i = 0; i < argCount; i++) {
                 Object val = args.get(i).eval(ctx);
-                if (val instanceof String s) {
-                    if (s.indexOf('ƈ') != -1 || s.indexOf('Ţ') != -1) {
-                        val = unescape(s);
-                    }
-                }
                 values[i] = val;
             }
 
-            Object[] adapted = ReflectionUtil.adaptArguments(paramTypesPerCache[idx], values, isVarargsPerCache[idx]);
-
-            try {
-                return isStatic ? handle.invokeExact(adapted) : handle.invokeExact(obj, adapted);
-            } catch (WrongMethodTypeException e) {
-                cachedClasses[idx] = null;
-                throw e;
+            for (int i = 0; i < PIC_SIZE; i++) {
+                if (cachedClasses[i] == currentClass) {
+                    Method method = cachedMethods[i];
+                    Object[] adapted = ReflectionUtil.adaptArguments(method.getParameterTypes(), values, method.isVarArgs());
+                    return method.invoke(Modifier.isStatic(method.getModifiers()) ? null : obj, adapted);
+                }
             }
+
+            return synchronizedLinkAndInvoke(currentClass, obj, values);
         }
 
-        private synchronized Object synchronizedLinkAndInvoke(Class<?> clazz, Object obj, EvalContext ctx) throws Throwable {
-            Object[] values = new Object[argCount];
-            for (int i = 0; i < argCount; i++) values[i] = args.get(i).eval(ctx);
+        private Object callZeroArg(Object obj) throws Throwable {
+            Class<?> currentClass = (obj instanceof Class) ? (Class<?>) obj : obj.getClass();
+
+            for (int i = 0; i < PIC_SIZE; i++) {
+                if (cachedClasses[i] == currentClass) {
+                    Method method = cachedMethods[i];
+                    return method.invoke(Modifier.isStatic(method.getModifiers()) ? null : obj, ReflectionUtil.EMPTY_ARRAY);
+                }
+            }
+            return synchronizedLinkAndInvoke(currentClass, obj, ReflectionUtil.EMPTY_ARRAY);
+        }
+
+        private synchronized Object synchronizedLinkAndInvoke(Class<?> clazz, Object obj, Object[] values) throws Throwable {
+            for (int i = 0; i < PIC_SIZE; i++) {
+                if (cachedClasses[i] == clazz) {
+                    Method method = cachedMethods[i];
+                    Object[] adapted = ReflectionUtil.adaptArguments(method.getParameterTypes(), values, method.isVarArgs());
+                    return method.invoke(Modifier.isStatic(method.getModifiers()) ? null : obj, adapted);
+                }
+            }
 
             Method method = ReflectionUtil.findMethodDeep(clazz, methodName, values);
             if (method == null) {
                 Debug.echoError("Method '" + methodName + "' not found in " + clazz.getSimpleName());
                 return null;
             }
-
             method.setAccessible(true);
-            MethodHandle baseHandle = MethodHandles.lookup().unreflect(method);
-
-            boolean isStatic = Modifier.isStatic(method.getModifiers());
-            Class<?>[] pTypes = method.getParameterTypes();
-            MethodHandle spreader = baseHandle.asSpreader(Object[].class, pTypes.length);
-
-            MethodHandle finalHandle;
-            if (isStatic) {
-                finalHandle = spreader.asType(MethodType.methodType(Object.class, Object[].class));
-            } else {
-                finalHandle = spreader.asType(MethodType.methodType(Object.class, Object.class, Object[].class));
-            }
 
             for (int i = 0; i < PIC_SIZE; i++) {
                 if (cachedClasses[i] == null || i == PIC_SIZE - 1) {
                     cachedClasses[i] = clazz;
-                    cachedHandles[i] = finalHandle;
-                    paramTypesPerCache[i] = pTypes;
-                    isVarargsPerCache[i] = method.isVarArgs();
-                    isStaticPerCache[i] = isStatic;
+                    cachedMethods[i] = method;
                     break;
                 }
             }
 
-            Object[] adapted = ReflectionUtil.adaptArguments(pTypes, values, method.isVarArgs());
-            return isStatic ? finalHandle.invokeExact(adapted) : finalHandle.invokeExact(obj, adapted);
+            Object[] adapted = ReflectionUtil.adaptArguments(method.getParameterTypes(), values, method.isVarArgs());
+            return method.invoke(Modifier.isStatic(method.getModifiers()) ? null : obj, adapted);
         }
     }
 
@@ -1283,26 +1281,33 @@ public final class JavaExpressionEngine {
             if (pLen == 0) return EMPTY_ARRAY;
 
             if (!isVarargs && args.length == pLen) {
-                boolean perfectMatch = true;
+                boolean dirty = false;
                 for (int i = 0; i < pLen; i++) {
                     Object arg = args[i];
                     Class<?> pType = paramTypes[i];
 
                     if (arg == null) {
-                        if (pType.isPrimitive()) { perfectMatch = false; break; }
+                        if (pType.isPrimitive()) { dirty = true; break; }
+                        continue;
+                    }
+
+                    if (arg instanceof com.denizenscript.denizencore.objects.ObjectTag) {
+                        dirty = true; break;
+                    }
+                    if (arg instanceof Lambda) {
+                        dirty = true; break;
+                    }
+
+                    Class<?> argCls = arg.getClass();
+                    if (pType.isPrimitive()) {
+                        if (argCls != primitiveToWrapper(pType)) { dirty = true; break; }
                     } else {
-                        if (arg instanceof com.denizenscript.denizencore.objects.ObjectTag) {
-                            perfectMatch = false; break;
-                        }
-                        Class<?> argCls = arg.getClass();
-                        if (pType.isPrimitive()) {
-                            if (argCls != primitiveToWrapper(pType)) { perfectMatch = false; break; }
-                        } else if (!pType.isAssignableFrom(argCls)) {
-                            perfectMatch = false; break;
+                        if (!pType.isAssignableFrom(argCls)) {
+                            dirty = true; break;
                         }
                     }
                 }
-                if (perfectMatch) return args;
+                if (!dirty) return args;
             }
 
             if (!isVarargs) {
@@ -1352,6 +1357,15 @@ public final class JavaExpressionEngine {
 
             if (paramType.isInstance(arg)) return arg;
 
+            if (arg instanceof Number n) {
+                if (paramType == float.class || paramType == Float.class) return n.floatValue();
+                if (paramType == int.class || paramType == Integer.class) return n.intValue();
+                if (paramType == double.class || paramType == Double.class) return n.doubleValue();
+                if (paramType == long.class || paramType == Long.class) return n.longValue();
+                if (paramType == short.class || paramType == Short.class) return n.shortValue();
+                if (paramType == byte.class || paramType == Byte.class) return n.byteValue();
+            }
+
             if (arg instanceof String text) {
                 if (text.isEmpty()) return paramType == String.class ? "" : null;
 
@@ -1367,17 +1381,6 @@ public final class JavaExpressionEngine {
 
                 if (Number.class.isAssignableFrom(primitiveToWrapper(paramType)))
                     return convertToNumber(primitiveToWrapper(paramType), text.trim());
-            }
-
-            if (arg instanceof Number n) {
-                Class<?> wrapper = paramType.isPrimitive() ? primitiveToWrapper(paramType) : paramType;
-
-                if (wrapper == Float.class) return n.floatValue();
-                if (wrapper == Double.class) return n.doubleValue();
-                if (wrapper == Integer.class) return n.intValue();
-                if (wrapper == Long.class) return n.longValue();
-                if (wrapper == Short.class) return n.shortValue();
-                if (wrapper == Byte.class) return n.byteValue();
             }
 
             return arg;
