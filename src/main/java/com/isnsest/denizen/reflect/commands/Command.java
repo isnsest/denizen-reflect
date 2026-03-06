@@ -30,6 +30,8 @@ import java.util.*;
 @SuppressWarnings("unused")
 public class Command extends AbstractCommand {
 
+    public static final List<String> commands = new ArrayList<>();
+
     // @Plugin denizen-reflect
     public Command() {
         setName("command");
@@ -53,6 +55,9 @@ public class Command extends AbstractCommand {
     //    - name: (required) Variable name.
     //    - tooltip: (optional) Syntax display.
     //    - default: (optional) Default value.
+    //
+    // @Tags
+    // <util.custom_commands>
     //
     // @Usage
     // Use to create custom command: '- role [<role>] ({player}/<entity>|...) (announce)'.
@@ -108,6 +113,7 @@ public class Command extends AbstractCommand {
                 if (DenizenCore.commandRegistry.instances.remove(commandName) == null) {
                     Debug.echoError("No such command: " + commandName);
                 }
+                commands.remove(commandName);
             }
             case "rename" -> {
                 AbstractCommand instance = DenizenCore.commandRegistry.instances.get(commandName);
@@ -125,6 +131,8 @@ public class Command extends AbstractCommand {
 
                 DenizenCore.commandRegistry.instances.remove(commandName);
                 DenizenCore.commandRegistry.instances.put(newName, instance);
+                commands.remove(commandName);
+                commands.add(newName);
             }
             default -> Debug.echoError("Invalid action '" + action + "'. Expected: create, delete, rename.");
         }
@@ -133,6 +141,7 @@ public class Command extends AbstractCommand {
     private static void create(String commandName, ObjectTag withObj, ScriptEntry contextEntry, Object executor) {
         if (withObj == null) {
             DenizenCore.commandRegistry.instances.put(commandName, new DynamicCommand(commandName, Collections.emptyList(), executor));
+            commands.add(commandName);
             return;
         }
 
@@ -173,6 +182,7 @@ public class Command extends AbstractCommand {
         }
 
         DenizenCore.commandRegistry.instances.put(commandName, new DynamicCommand(commandName, configList, executor));
+        commands.add(commandName);
     }
 
     private enum ArgType {

@@ -5,6 +5,9 @@ import com.denizenscript.denizencore.events.ScriptEvent;
 import com.denizenscript.denizencore.events.core.PreScriptReloadScriptEvent;
 import com.denizenscript.denizencore.events.core.ScriptGeneratesErrorScriptEvent;
 import com.denizenscript.denizencore.objects.ObjectFetcher;
+import com.denizenscript.denizencore.objects.ObjectTag;
+import com.denizenscript.denizencore.objects.core.ListTag;
+import com.denizenscript.denizencore.tags.core.UtilTagBase;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import com.isnsest.denizen.reflect.commands.*;
 import com.isnsest.denizen.reflect.util.ImportManager;
@@ -19,6 +22,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
+
+import static com.isnsest.denizen.reflect.commands.Command.commands;
 
 public class DenizenReflect extends JavaPlugin {
 
@@ -75,6 +80,10 @@ public class DenizenReflect extends JavaPlugin {
             ScriptEvent.registerScriptEvent(PlaceholderEvent.class);
         }
         DenizenCore.commandRegistry.registerCommand(LibloadCommand.class);
+
+        UtilTagBase.instance.tagProcessor.registerTag(ObjectTag.class, "custom_commands", (attribute, object) -> {
+            return new ListTag(commands);
+        });
     }
 
     @Override
