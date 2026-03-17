@@ -14,8 +14,10 @@ import com.denizenscript.denizencore.scripts.containers.ScriptContainer;
 import com.denizenscript.denizencore.scripts.queues.core.InstantQueue;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import com.denizenscript.denizencore.utilities.text.StringHolder;
+import com.isnsest.denizen.reflect.DenizenReflect;
 import com.isnsest.denizen.reflect.util.JavaExpressionEngine;
 import com.isnsest.denizen.reflect.util.LibraryLoader;
+import org.bukkit.Bukkit;
 
 import java.lang.reflect.*;
 import java.util.*;
@@ -140,8 +142,6 @@ public class ProxyCommand extends AbstractCommand {
                         return null;
                     }
 
-                int i = 0;
-
                 ListTag definitions;
                 ListTag argsList = new ListTag();
                 if (args != null) {
@@ -154,21 +154,26 @@ public class ProxyCommand extends AbstractCommand {
                     ScriptContainer container = ScriptRegistry.getScriptContainer((String) scriptName.getJavaObject());
                     definitions = new ListTag(container.getString("definitions"));
                     ScriptEntryData data = creationEntry.entryData.clone();
-
-                    InstantQueue queue = new InstantQueue("PROXY_");
-                    queue.addEntries(container.getBaseEntries(data));
-                    for (String arg : argsList) {
-                        try {
-                            queue.addDefinition(definitions.get(i), arg);
-                        } catch (Exception e) {
-                            queue.addDefinition(String.valueOf(i + 1), arg);
-                        } i++;
-                    }
-                    queue.addDefinition("proxy", new JavaReflectedObjectTag(proxy));
-                    queue.addDefinition("method", new ElementTag(methodName));
-                    queue.start();
+                    Bukkit.getScheduler().runTask(DenizenReflect.getInstance(), () -> {
+                        int i = 0;
+                        InstantQueue queue = new InstantQueue("PROXY_");
+                        queue.addEntries(container.getBaseEntries(data));
+                        for (String arg : argsList) {
+                            try {
+                                queue.addDefinition(definitions.get(i), arg);
+                            } catch (Exception e) {
+                                queue.addDefinition(String.valueOf(i + 1), arg);
+                            }
+                            i++;
+                        }
+                        queue.addDefinition("proxy", new JavaReflectedObjectTag(proxy));
+                        queue.addDefinition("method", new ElementTag(methodName));
+                        queue.start();
+                    });
                 } else if (scriptName.getJavaObject() instanceof SectionCommand.Section section) {
-                    section.run(null, args);
+                    Bukkit.getScheduler().runTask(DenizenReflect.getInstance(), () -> {
+                        section.run(null, args);
+                    });
                 } else {
                     Debug.echoError("Proxy handler refers to missing script: " + scriptName);
                     return null;
