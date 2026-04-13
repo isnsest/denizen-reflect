@@ -3,7 +3,6 @@ package com.isnsest.denizen.reflect.util;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.lang.invoke.WrongMethodTypeException;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,15 +12,12 @@ import com.denizenscript.denizen.utilities.Utilities;
 import com.denizenscript.denizencore.objects.ObjectFetcher;
 import com.denizenscript.denizencore.objects.ObjectTag;
 import com.denizenscript.denizencore.objects.core.JavaReflectedObjectTag;
-import com.denizenscript.denizencore.objects.core.MapTag;
 import com.denizenscript.denizencore.scripts.ScriptEntry;
 import com.denizenscript.denizencore.tags.TagContext;
 import com.denizenscript.denizencore.tags.core.EscapeTagUtil;
 import com.denizenscript.denizencore.utilities.CoreUtilities;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import meigo.denizen.DenizenTagFinder;
-
-import static com.isnsest.denizen.reflect.util.JavaExpressionEngine.ReflectionUtil.EMPTY_ARRAY;
 
 public final class JavaExpressionEngine {
 
@@ -1216,11 +1212,7 @@ public final class JavaExpressionEngine {
         }
 
         static Method findMethodDeep(Class<?> type, String name, Object[] args) {
-            while (type != null && !Modifier.isPublic(type.getModifiers())) {
-                type = type.getSuperclass();
-            }
             if (type == null) return null;
-
             Map<String, List<Method>> methodsByName = METHODS_INDEX.computeIfAbsent(type, clz -> {
                 Map<String, List<Method>> map = new HashMap<>();
 
@@ -1243,11 +1235,8 @@ public final class JavaExpressionEngine {
             if (candidates == null) return null;
 
             for (Method m : candidates) if (!m.isVarArgs() && isApplicable(m.getParameterTypes(), args, true)) return m;
-
             for (Method m : candidates) if (m.isVarArgs() && isVarArgApplicable(m.getParameterTypes(), args, true)) return m;
-
             for (Method m : candidates) if (!m.isVarArgs() && isApplicable(m.getParameterTypes(), args, false)) return m;
-
             for (Method m : candidates) if (m.isVarArgs() && isVarArgApplicable(m.getParameterTypes(), args, false)) return m;
 
             return null;
