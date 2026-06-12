@@ -34,6 +34,7 @@ public class CustomTagEvent extends ScriptEvent {
     public static CustomTagEvent instance;
 
     public String id;
+    public String type;
     public ScriptEntryData entryData = null;
     public ObjectTag object;
     public Attribute attribute;
@@ -52,7 +53,7 @@ public class CustomTagEvent extends ScriptEvent {
         if (!runGenericSwitchCheck(path, "id", id)) {
             return false;
         }
-        return runGenericSwitchCheck(path, "object_type", object.getPrefix().toLowerCase());
+        return runGenericSwitchCheck(path, "object_type", type);
     }
 
     @Override
@@ -65,19 +66,20 @@ public class CustomTagEvent extends ScriptEvent {
         return switch (name) {
             case "id" -> new ElementTag(id);
             case "object" -> object;
-            case "object_type" -> new ElementTag(object.getPrefix().toLowerCase());
+            case "object_type" -> new ElementTag(type);
             case "raw_param" -> new ElementTag(attribute.getRawParam());
             case "param" -> attribute.getParamObject();
             default -> super.getContext(name);
         };
     }
 
-    public static CustomTagEvent runCustomTag(ScriptEntryData data, Attribute attribute, ObjectTag object, String id) {
+    public static CustomTagEvent runCustomTag(ScriptEntryData data, Attribute attribute, ObjectTag object, String id, String type) {
 
         instance.id = id;
         instance.entryData = data;
         instance.attribute = attribute;
         instance.object = object;
+        instance.type = type;
 
         return (CustomTagEvent) instance.fire();
     }
