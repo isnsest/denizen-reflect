@@ -33,7 +33,7 @@ public class CustomCommandEvent extends ScriptEvent {
     public String id;
     public ScriptEntryData entryData = null;
     public ScriptEntry scriptEntry = null;
-    public String determination = null;
+    public ObjectTag determination = null;
 
 
 
@@ -42,7 +42,7 @@ public class CustomCommandEvent extends ScriptEvent {
         registerCouldMatcher("custom command");
         registerSwitches("id");
         this.<CustomCommandEvent, ObjectTag>registerDetermination(null, ObjectTag.class, (evt, context, output) -> {
-            determination = output.toString();
+            determination = output;
         });
     }
 
@@ -68,7 +68,7 @@ public class CustomCommandEvent extends ScriptEvent {
         }
     }
 
-    public static String runCustomCommand(ScriptEntry scriptEntry, String id) {
+    public static ObjectTag runCustomCommand(ScriptEntry scriptEntry, String id) {
 
         instance.id = id;
         instance.entryData = scriptEntry.entryData;

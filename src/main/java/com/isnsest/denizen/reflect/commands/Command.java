@@ -23,6 +23,7 @@ import com.denizenscript.denizencore.scripts.queues.core.InstantQueue;
 import com.denizenscript.denizencore.tags.TagManager;
 import com.denizenscript.denizencore.utilities.CoreUtilities;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.denizenscript.denizencore.utilities.text.StringHolder;
 import com.isnsest.denizen.reflect.events.CustomCommandEvent;
 
 import java.util.*;
@@ -357,10 +358,12 @@ public class Command extends AbstractCommand {
                 }
             }
 
+            ObjectTag determination = null;
             if (executor.equals("event")) {
-                CustomCommandEvent.runCustomCommand(scriptEntry, commandName);
+                determination = CustomCommandEvent.runCustomCommand(scriptEntry, commandName);
             } else if (executor instanceof SectionCommand.Section section) {
                 ScriptQueue queue = section.run(contextSource);
+                determination = TagManager.tagObject(queue.determinations.getFirst(), scriptEntry.context);
             } else if (executor instanceof TaskScriptContainer container) {
                 PlayerTag player = Utilities.getEntryPlayer(scriptEntry);
                 ScriptEntryData scriptEntryData = new BukkitScriptEntryData(player, null);
@@ -369,6 +372,20 @@ public class Command extends AbstractCommand {
                 queue.addEntries(entries);
                 queue.setContextSource(contextSource);
                 queue.start();
+                determination = TagManager.tagObject(queue.determinations.getFirst(), scriptEntry.context);
+            }
+
+            if (determination != null) {
+                if (determination.shouldBeType(MapTag.class)) {
+                    MapTag map = determination.asType(MapTag.class, scriptEntry.context);
+                    for (Map.Entry<StringHolder, ObjectTag> string : map.entrySet()) {
+                        scriptEntry.saveObject(string.getKey().toString(), string.getValue());
+                    }
+
+                } else if (determination.shouldBeType(ElementTag.class)) {
+                    String message = determination.asType(ElementTag.class, scriptEntry.context).asString();
+                    Debug.echoError(message);
+                }
             }
         }
     }
