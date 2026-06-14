@@ -123,7 +123,10 @@ public class TagCommand extends AbstractCommand {
 
             case "delete":
                 if (!in.equals("null")) {
-                    ObjectTagProcessor<ObjectTag> processor = DynamicTagRegistry.processors.get(in);
+                    ObjectTagProcessor<? extends ObjectTag> processor = DynamicTagRegistry.processors.get(in);
+                    if (processor == null) {
+                        processor = TagManager.baseTags.get(in).processor;
+                    }
                     if (processor == null) {
                         Debug.echoError("Base Tag '" + in + "' not found.");
                     } else if (!processor.registeredObjectTags.containsKey(tag_name)) {
