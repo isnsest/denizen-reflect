@@ -4,6 +4,7 @@ import com.denizenscript.denizencore.events.ScriptEvent;
 import com.denizenscript.denizencore.events.core.PreScriptReloadScriptEvent;
 import com.denizenscript.denizencore.events.core.ScriptGeneratesErrorScriptEvent;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.isnsest.denizen.reflect.util.codegen.ScriptClassRegistry;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +21,8 @@ public class ImportManager {
     public static ScriptEvent runImport() {
 
         JavaExpressionEngine.clearAllImports();
+
+        ScriptClassRegistry.initialize();
 
         try (var walk = Files.walk(root)) {
             walk.filter(f -> f.toString().toLowerCase().endsWith(".dsc"))
@@ -51,13 +54,12 @@ public class ImportManager {
 
         err = ScriptGeneratesErrorScriptEvent.instance;
         ScriptGeneratesErrorScriptEvent.instance = new ScriptGeneratesErrorScriptEvent() {
-
             @Override
             public ScriptEvent fire() {
                 if (this.message.contains("IMPORT")) {
-                        this.cancelled = true;
-                        this.cancellationChanged();
-                        return null;
+                    this.cancelled = true;
+                    this.cancellationChanged();
+                    return null;
                 }
                 ScriptEvent result = null;
                 if (err != null) {
