@@ -45,10 +45,12 @@ class ClasspathResolver {
             } catch (Throwable ignored) {}
         }
 
-        String[] commonLibFolders = {"libraries", "bin", "cache", "plugins"};
+        String[] commonLibFolders = {"bin", "cache", "plugins"};
         for (String folderName : commonLibFolders) {
             scanJarsSafely(new File(folderName), cp, 2);
         }
+
+        scanJarsSafely(new File("libraries"), cp, 10);
 
         cachedClasspath = String.join(File.pathSeparator, cp);
         return cachedClasspath;

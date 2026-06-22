@@ -39,7 +39,13 @@ public final class ScriptClassRegistry {
     private static final Pattern PACKAGE_PATTERN = Pattern.compile("package\\s+([a-zA-Z0-9_.]+);");
     private static final Pattern PERSISTENT_PATTERN = Pattern.compile("(?i)@persistent");
 
+    private static ScriptClassLoader activeVolatileLoader;
+
     private ScriptClassRegistry() {
+    }
+
+    public static ClassLoader getActiveScriptLoader() {
+        return activeVolatileLoader;
     }
 
     public void runInitialization() {
@@ -65,6 +71,7 @@ public final class ScriptClassRegistry {
 
             final Set<String> currentPersistentPaths = new HashSet<>();
             final Set<String> classesForPersistentLoader = new HashSet<>();
+            final Set<String> classesToSkipLoading = new HashSet<>();
 
             boolean recreatePersistent = false;
             List<Path> allFiles;
@@ -120,21 +127,29 @@ public final class ScriptClassRegistry {
             }
 
             ScriptClassLoader volatileLoader = new ScriptClassLoader(persistentLoader);
+            activeVolatileLoader = volatileLoader;
+
+            if (!recreatePersistent) {
+                for (ScriptFile sf : scriptFiles) {
+                    if (sf.isPersistent()) {
+                        classesToSkipLoading.add(sf.getFullClassName());
+                    }
+                }
+            }
 
             for (ScriptFile sf : scriptFiles) {
                 classToPathMap.put(sf.getFullClassName(), sf.getRelativePath());
 
-                boolean skipCompilation = sf.isPersistent() && !recreatePersistent;
-                if (skipCompilation) {
-                    continue;
+                boolean shouldReload = !sf.isPersistent() || recreatePersistent;
+                if (shouldReload) {
+                    classesToShutdown.add(sf.getSimpleName());
                 }
 
-                classesToShutdown.add(sf.getSimpleName());
                 if (sf.isPersistent()) {
                     classesForPersistentLoader.add(sf.getFullClassName());
                 }
 
-                String finalSource = sf.getContent().replaceAll("(?im)^\\s*(//|/\\*)*\\s*@persistent\\s*(\\*/)*\\r?\\n?", "");
+                String finalSource = sf.getContent().replaceAll("(?im)\\s*@persistent\\s*\\r?\\n?", "");
 
                 compilationUnits.add(new SimpleJavaFileObject(URI.create("string:///" + sf.getFullClassName().replace('.', '/') + ".java"), JavaFileObject.Kind.SOURCE) {
                     @Override
@@ -162,7 +177,7 @@ public final class ScriptClassRegistry {
                 final ScriptClassLoader volLoader = volatileLoader;
                 final ScriptClassLoader persLoader = persistentLoader;
                 CompletableFuture.runAsync(() -> runBatchCompilation(
-                        volLoader, persLoader, classesForPersistentLoader, compilationUnits, currentPersistentPaths
+                        volLoader, persLoader, classesForPersistentLoader, classesToSkipLoading, compilationUnits, currentPersistentPaths
                 ));
             } else {
                 compiling.set(false);
@@ -178,6 +193,7 @@ public final class ScriptClassRegistry {
             ScriptClassLoader volLoader,
             ScriptClassLoader persLoader,
             Set<String> classesForPersistentLoader,
+            Set<String> classesToSkipLoading,
             List<JavaFileObject> units,
             Set<String> currentPersistentPaths
     ) {
@@ -213,14 +229,17 @@ public final class ScriptClassRegistry {
                         try {
                             results.forEach((name, data) -> {
                                 try {
-                                    byte[] bytes = data.getByteCode();
-
                                     String baseName = name;
                                     int dollarIndex = name.indexOf('$');
                                     if (dollarIndex != -1) {
                                         baseName = name.substring(0, dollarIndex);
                                     }
 
+                                    if (classesToSkipLoading.contains(baseName)) {
+                                        return;
+                                    }
+
+                                    byte[] bytes = data.getByteCode();
                                     ScriptClassLoader loaderToUse = classesForPersistentLoader.contains(baseName) ? persLoader : volLoader;
                                     Class<?> clazz = loaderToUse.defineFromByteCode(name, bytes);
 
@@ -332,7 +351,7 @@ public final class ScriptClassRegistry {
 
         public boolean isJava() {
             if (content.isEmpty()) return false;
-            String checkContent = cleanContent.replaceAll("(?im)^\\s*(//|/\\*)*\\s*@persistent\\s*(\\*/)*\\r?\\n?", "").trim();
+            String checkContent = cleanContent.replaceAll("(?im)\\s*@persistent\\s*\\r?\\n?", "").trim();
             if (checkContent.startsWith("{")) return true;
             if (checkContent.startsWith("package ") || checkContent.startsWith("import ")) {
                 return !checkContent.startsWith("import:") && !checkContent.startsWith("import :");

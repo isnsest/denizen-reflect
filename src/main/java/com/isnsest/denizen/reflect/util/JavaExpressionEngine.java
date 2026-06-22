@@ -17,6 +17,7 @@ import com.denizenscript.denizencore.tags.TagContext;
 import com.denizenscript.denizencore.tags.core.EscapeTagUtil;
 import com.denizenscript.denizencore.utilities.CoreUtilities;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.isnsest.denizen.reflect.util.codegen.ScriptClassRegistry;
 import meigo.denizen.DenizenTagFinder;
 
 public final class JavaExpressionEngine {
@@ -873,7 +874,19 @@ public final class JavaExpressionEngine {
             if (cached == CLASS_NOT_FOUND_MARKER) throw new ClassNotFoundException(name);
             return cached;
         }
+
         try {
+            ClassLoader scriptLoader = ScriptClassRegistry.getActiveScriptLoader();
+            if (scriptLoader != null) {
+                try {
+                    Class<?> cls = Class.forName(name, true, scriptLoader);
+                    classLookupCache.put(name, cls);
+                    return cls;
+                } catch (ClassNotFoundException ignored) {
+
+                }
+            }
+
             Class<?> cls = Class.forName(name, true, LibraryLoader.getClassLoader());
             classLookupCache.put(name, cls);
             return cls;

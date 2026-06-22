@@ -1,6 +1,6 @@
 package com.isnsest.denizen.reflect.util.codegen;
 
-class ScriptClassLoader extends ClassLoader {
+public class ScriptClassLoader extends ClassLoader {
     public ScriptClassLoader(ClassLoader parent) {
         super(parent);
     }
