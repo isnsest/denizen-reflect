@@ -70,7 +70,7 @@ public class ProxyCommand extends AbstractCommand {
                     clazz = imported;
                 } else {
                     try {
-                        clazz = resolveClass(name);
+                        clazz = resolveClass(interfaceName);
                     } catch (ClassNotFoundException ignored) {}
                 }
                 if (clazz != null && clazz.isInterface()) {
@@ -158,7 +158,7 @@ public class ProxyCommand extends AbstractCommand {
                         int i = 0;
                         InstantQueue queue = new InstantQueue("PROXY_");
                         queue.addEntries(container.getBaseEntries(data));
-                        for (String arg : argsList) {
+                        for (ObjectTag arg : argsList.objectForms) {
                             try {
                                 queue.addDefinition(definitions.get(i), arg);
                             } catch (Exception e) {

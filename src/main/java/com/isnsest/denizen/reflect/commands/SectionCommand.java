@@ -57,11 +57,11 @@ public class SectionCommand extends BracedCommand {
         @SuppressWarnings("unused")
         public ScriptQueue run(ContextSource contextSource, Object... def) {
             Consumer<ScriptQueue> configure = (queue) -> {
-                queue.definitions = defMap;
+                queue.definitions = defMap.duplicate();
                 if (def != null) {
                     int i = 0;
                     for (Object object : def) {
-                        String key = definitions.get(i);
+                        String key = (definitions != null && i < definitions.size()) ? definitions.get(i) : null;
                         queue.addDefinition(key != null ? key : String.valueOf(i + 1), wrapObject(object, context));
                         i++;
                     }
