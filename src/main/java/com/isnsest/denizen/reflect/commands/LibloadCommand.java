@@ -6,6 +6,7 @@ import com.denizenscript.denizencore.scripts.commands.AbstractCommand;
 import com.denizenscript.denizencore.scripts.commands.generator.*;
 import com.denizenscript.denizencore.tags.TagManager;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.isnsest.denizen.reflect.DenizenReflect;
 import com.isnsest.denizen.reflect.util.LibraryLoader;
 
 public class LibloadCommand extends AbstractCommand {
@@ -15,6 +16,9 @@ public class LibloadCommand extends AbstractCommand {
         setName("libload");
         setSyntax("libload [<url>]");
         setRequiredArguments(1, 1);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
         registerTags();
     }

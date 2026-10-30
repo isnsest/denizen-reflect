@@ -11,6 +11,7 @@ import com.denizenscript.denizencore.scripts.queues.ScriptQueue;
 import com.denizenscript.denizencore.scripts.commands.BracedCommand;
 import com.denizenscript.denizencore.tags.TagContext;
 import com.denizenscript.denizencore.utilities.ScriptUtilities;
+import com.isnsest.denizen.reflect.DenizenReflect;
 
 import static com.isnsest.denizen.reflect.util.JavaExpressionEngine.wrapObject;
 
@@ -25,6 +26,9 @@ public class SectionCommand extends BracedCommand {
         setName("section");
         setSyntax("section (<definitions>) (as:<name>)");
         setRequiredArguments(0, 2);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
     }
 

@@ -8,6 +8,7 @@ import com.denizenscript.denizencore.scripts.commands.generator.ArgLinear;
 import com.denizenscript.denizencore.scripts.commands.generator.ArgName;
 import com.denizenscript.denizencore.scripts.commands.generator.ArgPrefixed;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.isnsest.denizen.reflect.DenizenReflect;
 
 public class EventCommand extends AbstractCommand {
 
@@ -16,6 +17,9 @@ public class EventCommand extends AbstractCommand {
         setName("event");
         setSyntax("event [rename] [<event_name>] [to:<new_event_name>]");
         setRequiredArguments(3, 3);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
     }
 

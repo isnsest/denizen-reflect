@@ -15,17 +15,19 @@ import com.denizenscript.denizencore.scripts.queues.ScriptQueue;
 import com.denizenscript.denizencore.scripts.queues.core.InstantQueue;
 import com.denizenscript.denizencore.tags.*;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.isnsest.denizen.reflect.DenizenReflect;
 import com.isnsest.denizen.reflect.events.CustomTagEvent;
 
 import javax.annotation.Nullable;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class TagCommand extends AbstractCommand {
 
     public static class DynamicTagRegistry {
-        public static Map<String, ObjectTagProcessor<ObjectTag>> processors = new HashMap<>();
+        public static Map<String, ObjectTagProcessor<ObjectTag>> processors = new ConcurrentHashMap<>();
     }
 
     public TagCommand() {
@@ -33,6 +35,9 @@ public class TagCommand extends AbstractCommand {
         setSyntax("tag [create/delete] [<tag_name>] (static) (in:<object_name>) (executor:{event}/<script>/<section>/<tag>)");
         setRequiredArguments(2, 4);
         setParseArgs(false);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
     }
 

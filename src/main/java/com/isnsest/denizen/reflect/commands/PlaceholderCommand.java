@@ -39,6 +39,9 @@ public class PlaceholderCommand extends AbstractCommand implements Listener {
         setSyntax("placeholder [create/delete] [<placeholder>] [author:<author>] [version:<version>] (executor:{event}/<script>/<section>/<tag>)");
         setRequiredArguments(2, 5);
         setParseArgs(false);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
         Bukkit.getPluginManager().registerEvents(this, DenizenReflect.getInstance());
     }

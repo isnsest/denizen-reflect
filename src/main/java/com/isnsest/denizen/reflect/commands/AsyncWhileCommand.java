@@ -15,6 +15,7 @@ import com.denizenscript.denizencore.objects.core.ElementTag;
 import com.denizenscript.denizencore.scripts.ScriptEntry;
 import com.denizenscript.denizencore.scripts.commands.BracedCommand;
 import com.denizenscript.denizencore.utilities.text.StringHolder;
+import com.isnsest.denizen.reflect.DenizenReflect;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +30,9 @@ public class AsyncWhileCommand extends BracedCommand {
         setSyntax("async-while [stop/next/[<value>] (!)(<operator> <value>) (&&/|| ...)] [<commands>]");
         setRequiredArguments(1, -1);
         setParseArgs(false);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
     }
 
     // <--[command]

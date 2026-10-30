@@ -34,6 +34,15 @@ public class DenizenReflect extends JavaPlugin {
         return instance;
     }
 
+    public static boolean isDenizenM() {
+        try {
+            Class.forName("com.denizenscript.denizencore.scripts.queues.core.AsyncQueue");
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
     @Override
     public void onLoad() {
         register();

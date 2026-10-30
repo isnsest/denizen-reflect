@@ -7,6 +7,7 @@ import com.denizenscript.denizencore.scripts.commands.AbstractCommand;
 import com.denizenscript.denizencore.scripts.commands.generator.*;
 import com.denizenscript.denizencore.tags.TagManager;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.isnsest.denizen.reflect.DenizenReflect;
 import com.isnsest.denizen.reflect.util.JavaExpressionEngine;
 
 public class InvokeCommand extends AbstractCommand {
@@ -16,6 +17,9 @@ public class InvokeCommand extends AbstractCommand {
         setName("invoke");
         setSyntax("invoke [<java_expression>]");
         setRequiredArguments(1, 1);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
         registerTags();
     }

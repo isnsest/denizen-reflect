@@ -31,6 +31,9 @@ public class ProxyCommand extends AbstractCommand {
         setName("proxy");
         setSyntax("proxy [<interfaces>|...] (using:<map>) (as:<name>)");
         setRequiredArguments(3, 3);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
     }
 

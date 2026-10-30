@@ -24,6 +24,7 @@ import com.denizenscript.denizencore.tags.TagManager;
 import com.denizenscript.denizencore.utilities.CoreUtilities;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import com.denizenscript.denizencore.utilities.text.StringHolder;
+import com.isnsest.denizen.reflect.DenizenReflect;
 import com.isnsest.denizen.reflect.events.CustomCommandEvent;
 
 import java.util.*;
@@ -38,6 +39,9 @@ public class Command extends AbstractCommand {
         setName("command");
         setSyntax("command [create/delete/rename] [<command_name>] (with:<value>) (executor:{event}/<script>/<section>)");
         setRequiredArguments(2, 4);
+        if (DenizenReflect.isDenizenM()) {
+            setAsyncSafe(true);
+        }
         autoCompile();
     }
 
