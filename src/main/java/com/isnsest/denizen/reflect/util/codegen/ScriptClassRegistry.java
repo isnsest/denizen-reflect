@@ -10,9 +10,13 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -25,6 +29,8 @@ public final class ScriptClassRegistry {
         INSTANCE.runInitialization();
     }
 
+    private static final long COMPILE_TIMEOUT_MS = 60_000;
+
     private ScriptClassLoader persistentLoader = null;
 
     private final List<Class<?>> currentClasses = new ArrayList<>();
@@ -32,8 +38,21 @@ public final class ScriptClassRegistry {
     private final Set<String> persistentPaths = ConcurrentHashMap.newKeySet();
 
     private final AtomicBoolean compiling = new AtomicBoolean(false);
+    private final AtomicLong generation = new AtomicLong(0);
+    private volatile long compileStartedAt = 0;
+
     private final ClasspathResolver classpathResolver = new ClasspathResolver();
-    private StandardJavaFileManager cachedFileManager = null;
+
+    private final ExecutorService compileExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "denizen-reflect-compiler");
+        t.setDaemon(true);
+        return t;
+    });
+    private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "denizen-reflect-watchdog");
+        t.setDaemon(true);
+        return t;
+    });
 
     private static final Pattern CLASS_NAME_PATTERN = Pattern.compile("class\\s+([a-zA-Z0-9_$]+)");
     private static final Pattern PACKAGE_PATTERN = Pattern.compile("package\\s+([a-zA-Z0-9_.]+);");
@@ -48,8 +67,67 @@ public final class ScriptClassRegistry {
         return activeVolatileLoader;
     }
 
+    private long beginCompilation() {
+        long now = System.currentTimeMillis();
+        if (compiling.compareAndSet(false, true)) {
+            compileStartedAt = now;
+            return startWatchdog(generation.incrementAndGet());
+        }
+        if (now - compileStartedAt > COMPILE_TIMEOUT_MS) {
+            Debug.echoError("denizen-reflect: previous compilation looks stuck, forcing a new one.");
+            compileStartedAt = now;
+            return startWatchdog(generation.incrementAndGet());
+        }
+        return -1;
+    }
+
+    private long startWatchdog(long gen) {
+        try {
+            watchdog.schedule(() -> {
+                if (generation.get() == gen && compiling.get()) {
+                    Debug.echoError("denizen-reflect: compilation timed out after "
+                            + (COMPILE_TIMEOUT_MS / 1000) + "s, releasing the lock.");
+                    generation.incrementAndGet();
+                    compiling.set(false);
+                }
+            }, COMPILE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (Throwable ignored) {
+        }
+        return gen;
+    }
+
+    private void finish(long gen) {
+        if (generation.get() == gen) {
+            compiling.set(false);
+        }
+    }
+
+    private boolean isStale(long gen) {
+        return generation.get() != gen;
+    }
+
+    private void runOnMain(long gen, Runnable task) {
+        try {
+            Bukkit.getScheduler().runTask(Denizen.instance, () -> {
+                try {
+                    if (!isStale(gen)) {
+                        task.run();
+                    }
+                } catch (Throwable t) {
+                    Debug.echoError(t);
+                } finally {
+                    finish(gen);
+                }
+            });
+        } catch (Throwable t) {
+            Debug.echoError(t);
+            finish(gen);
+        }
+    }
+
     public void runInitialization() {
-        if (!compiling.compareAndSet(false, true)) {
+        final long gen = beginCompilation();
+        if (gen < 0) {
             Debug.log("denizen-reflect", "Compilation is already in progress.");
             return;
         }
@@ -57,7 +135,7 @@ public final class ScriptClassRegistry {
         try {
             Path scriptsRoot = Denizen.instance.getDataFolder().toPath().resolve("scripts");
             if (!Files.exists(scriptsRoot)) {
-                compiling.set(false);
+                finish(gen);
                 return;
             }
 
@@ -176,20 +254,22 @@ public final class ScriptClassRegistry {
             if (!compilationUnits.isEmpty()) {
                 final ScriptClassLoader volLoader = volatileLoader;
                 final ScriptClassLoader persLoader = persistentLoader;
-                CompletableFuture.runAsync(() -> runBatchCompilation(
-                        volLoader, persLoader, classesForPersistentLoader, classesToSkipLoading, compilationUnits, currentPersistentPaths
+                compileExecutor.execute(() -> runBatchCompilation(
+                        gen, volLoader, persLoader, classesForPersistentLoader, classesToSkipLoading,
+                        compilationUnits, currentPersistentPaths
                 ));
             } else {
-                compiling.set(false);
+                finish(gen);
             }
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Debug.echoError(e);
-            compiling.set(false);
+            finish(gen);
         }
     }
 
     private void runBatchCompilation(
+            long gen,
             ScriptClassLoader volLoader,
             ScriptClassLoader persLoader,
             Set<String> classesForPersistentLoader,
@@ -197,93 +277,121 @@ public final class ScriptClassRegistry {
             List<JavaFileObject> units,
             Set<String> currentPersistentPaths
     ) {
-        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-        if (compiler == null) {
-            Debug.echoError("JavaCompiler is null! Make sure the server is running on JDK, not JRE.");
-            compiling.set(false);
-            return;
-        }
+        final DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        final Map<String, ByteCodeData> results;
+        final boolean success;
 
+        StandardJavaFileManager fileManager = null;
         try {
-            if (cachedFileManager == null) {
-                cachedFileManager = compiler.getStandardFileManager(null, null, null);
+            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+            if (compiler == null) {
+                Debug.echoError("JavaCompiler is null! Make sure the server is running on JDK, not JRE.");
+                finish(gen);
+                return;
             }
-            ByteCodeProvider manager = new ByteCodeProvider(cachedFileManager);
+
+            fileManager = compiler.getStandardFileManager(null, null, null);
+            ByteCodeProvider manager = new ByteCodeProvider(fileManager);
 
             String classpath = classpathResolver.resolve();
             List<String> options = Arrays.asList("-classpath", classpath, "-nowarn", "-g:none", "-proc:none");
 
-            DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
             JavaCompiler.CompilationTask task = compiler.getTask(null, manager, diagnostics, options, null, units);
+            success = Boolean.TRUE.equals(task.call());
+            results = new HashMap<>(manager.getByteCodes());
+        } catch (Throwable t) {
+            Debug.echoError(t);
+            finish(gen);
+            return;
+        } finally {
+            if (fileManager != null) {
+                try {
+                    fileManager.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
 
-            CompletableFuture.supplyAsync(task::call).whenComplete((success, throwable) -> {
-                if (throwable != null) {
-                    Debug.echoError(throwable);
-                    compiling.set(false);
-                    return;
+        if (isStale(gen)) {
+            Debug.echoError("denizen-reflect: compilation finished too late, result ignored.");
+            return;
+        }
+
+        if (success) {
+            runOnMain(gen, () -> applyResults(
+                    results, volLoader, persLoader, classesForPersistentLoader,
+                    classesToSkipLoading, units.size(), currentPersistentPaths));
+        } else {
+            runOnMain(gen, () -> reportErrors(diagnostics));
+        }
+    }
+
+    private record PendingClass(ScriptClassLoader loader, String name) {
+    }
+
+    private void applyResults(
+            Map<String, ByteCodeData> results,
+            ScriptClassLoader volLoader,
+            ScriptClassLoader persLoader,
+            Set<String> classesForPersistentLoader,
+            Set<String> classesToSkipLoading,
+            int unitCount,
+            Set<String> currentPersistentPaths
+    ) {
+        List<PendingClass> mainClasses = new ArrayList<>();
+
+        for (Map.Entry<String, ByteCodeData> entry : results.entrySet()) {
+            try {
+                String name = entry.getKey().replace('/', '.');
+                int dollarIndex = name.indexOf('$');
+                String baseName = dollarIndex != -1 ? name.substring(0, dollarIndex) : name;
+
+                if (classesToSkipLoading.contains(baseName)) {
+                    continue;
                 }
 
-                if (Boolean.TRUE.equals(success)) {
-                    Map<String, ByteCodeData> results = manager.getByteCodes();
-                    Bukkit.getScheduler().runTask(Denizen.instance, () -> {
-                        try {
-                            results.forEach((name, data) -> {
-                                try {
-                                    String baseName = name;
-                                    int dollarIndex = name.indexOf('$');
-                                    if (dollarIndex != -1) {
-                                        baseName = name.substring(0, dollarIndex);
-                                    }
+                ScriptClassLoader loader = classesForPersistentLoader.contains(baseName) ? persLoader : volLoader;
+                loader.addPending(name, entry.getValue().getByteCode());
 
-                                    if (classesToSkipLoading.contains(baseName)) {
-                                        return;
-                                    }
-
-                                    byte[] bytes = data.getByteCode();
-                                    ScriptClassLoader loaderToUse = classesForPersistentLoader.contains(baseName) ? persLoader : volLoader;
-                                    Class<?> clazz = loaderToUse.defineFromByteCode(name, bytes);
-
-                                    if (dollarIndex == -1) {
-                                        registerClass(clazz);
-                                        invokeInit(clazz);
-                                    }
-                                } catch (Exception e) {
-                                    Debug.echoError("Error defining " + name + ": " + e.getMessage());
-                                }
-                            });
-
-                            persistentPaths.clear();
-                            persistentPaths.addAll(currentPersistentPaths);
-                            Debug.log("denizen-reflect", "Successfully compiled " + units.size() + " Java scripts.");
-                        } finally {
-                            compiling.set(false);
-                        }
-                    });
-                } else {
-                    Bukkit.getScheduler().runTask(Denizen.instance, () -> {
-                        Debug.echoError("Batch compilation failed! Errors:");
-                        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
-                            if (diagnostic.getKind() == Diagnostic.Kind.ERROR) {
-                                String fileName = "Unknown";
-                                if (diagnostic.getSource() != null) {
-                                    String path = diagnostic.getSource().toUri().getPath();
-                                    if (path != null) {
-                                        int lastSlash = path.lastIndexOf('/');
-                                        fileName = lastSlash != -1 ? path.substring(lastSlash + 1) : path;
-                                    } else {
-                                        fileName = diagnostic.getSource().getName();
-                                    }
-                                }
-                                Debug.echoError("File: " + fileName + " | Line: " + diagnostic.getLineNumber() + " | " + diagnostic.getMessage(Locale.ENGLISH));
-                            }
-                        }
-                        compiling.set(false);
-                    });
+                if (dollarIndex == -1) {
+                    mainClasses.add(new PendingClass(loader, name));
                 }
-            });
-        } catch (Exception e) {
-            Debug.echoError(e);
-            compiling.set(false);
+            } catch (Throwable t) {
+                Debug.echoError("Error preparing " + entry.getKey() + ": " + t.getMessage());
+            }
+        }
+
+        for (PendingClass pc : mainClasses) {
+            try {
+                Class<?> clazz = pc.loader().loadClass(pc.name());
+                registerClass(clazz);
+                invokeInit(clazz);
+            } catch (Throwable t) {
+                Debug.echoError("Error loading " + pc.name() + ": " + t);
+            }
+        }
+
+        persistentPaths.clear();
+        persistentPaths.addAll(currentPersistentPaths);
+        Debug.log("denizen-reflect", "Successfully compiled " + unitCount + " Java scripts.");
+    }
+
+    private void reportErrors(DiagnosticCollector<JavaFileObject> diagnostics) {
+        Debug.echoError("Batch compilation failed! Errors:");
+        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
+            if (diagnostic.getKind() == Diagnostic.Kind.ERROR) {
+                String fileName = "Unknown";
+                if (diagnostic.getSource() != null) {
+                    String path = diagnostic.getSource().toUri().getPath();
+                    if (path != null) {
+                        int lastSlash = path.lastIndexOf('/');
+                        fileName = lastSlash != -1 ? path.substring(lastSlash + 1) : path;
+                    } else {
+                        fileName = diagnostic.getSource().getName();
+                    }
+                }
+                Debug.echoError("File: " + fileName + " | Line: " + diagnostic.getLineNumber() + " | " + diagnostic.getMessage(Locale.ENGLISH));
+            }
         }
     }
 
@@ -306,8 +414,8 @@ public final class ScriptClassRegistry {
         try {
             clazz.getDeclaredMethod("init").invoke(null);
         } catch (NoSuchMethodException ignored) {
-        } catch (Exception e) {
-            Debug.log("denizen-reflect", "Error running init on class " + clazz.getSimpleName() + ": " + e.getMessage());
+        } catch (Throwable t) {
+            Debug.log("denizen-reflect", "Error running init on class " + clazz.getSimpleName() + ": " + t.getMessage());
         }
     }
 
@@ -315,8 +423,8 @@ public final class ScriptClassRegistry {
         try {
             clazz.getDeclaredMethod("shutdown").invoke(null);
         } catch (NoSuchMethodException ignored) {
-        } catch (Exception e) {
-            Debug.log("denizen-reflect", "Error running shutdown on class " + clazz.getSimpleName() + ": " + e.getMessage());
+        } catch (Throwable t) {
+            Debug.log("denizen-reflect", "Error running shutdown on class " + clazz.getSimpleName() + ": " + t.getMessage());
         }
     }
 
