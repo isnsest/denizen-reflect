@@ -5,7 +5,7 @@ import org.gradle.api.tasks.bundling.Jar
 plugins {
     `java-library`
     `maven-publish`
-    id("com.github.johnrengelman.shadow") version "8.1.1"
+    id("com.gradleup.shadow") version "9.0.0"
 }
 
 java {
@@ -58,7 +58,7 @@ dependencies {
 
 val buildNumber: String = System.getenv("BUILD_NUMBER") ?: project.property("BUILD_NUMBER") as String
 val buildDate: String = SimpleDateFormat("ddMMyyyy").format(Date())
-val pluginVersion = "2.4.2"
+val pluginVersion = "2.4.3"
 
 group = "isnsest"
 version = pluginVersion
