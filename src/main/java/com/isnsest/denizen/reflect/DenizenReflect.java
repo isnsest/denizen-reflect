@@ -68,8 +68,6 @@ public class DenizenReflect extends JavaPlugin {
         DenizenCore.commandRegistry.registerCommand(SectionCommand.class);
         DenizenCore.commandRegistry.registerCommand(ProxyCommand.class);
 
-        //
-
         ScriptEvent.registerScriptEvent(CustomTagEvent.class);
         ScriptEvent.registerScriptEvent(CustomCommandEvent.class);
     }

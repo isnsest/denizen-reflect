@@ -12,7 +12,7 @@ import com.denizenscript.denizencore.scripts.commands.BracedCommand;
 import com.denizenscript.denizencore.tags.TagContext;
 import com.denizenscript.denizencore.utilities.ScriptUtilities;
 
-import static com.isnsest.denizen.reflect.util.JavaExpressionEngine.wrapObject;
+import static com.isnsest.denizen.reflect.engine.JavaExpressionEngine.wrapObject;
 
 import java.util.List;
 import java.util.UUID;
@@ -20,7 +20,6 @@ import java.util.function.Consumer;
 
 public class SectionCommand extends BracedCommand {
 
-    // @Plugin denizen-reflect
     public SectionCommand() {
         setName("section");
         setSyntax("section (<definitions>) (as:<name>)");

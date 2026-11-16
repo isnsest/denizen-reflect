@@ -15,18 +15,16 @@ import com.denizenscript.denizencore.scripts.queues.core.InstantQueue;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
 import com.denizenscript.denizencore.utilities.text.StringHolder;
 import com.isnsest.denizen.reflect.DenizenReflect;
-import com.isnsest.denizen.reflect.util.JavaExpressionEngine;
+import com.isnsest.denizen.reflect.engine.ImportContext;
+import com.isnsest.denizen.reflect.engine.JavaExpressionEngine;
 import com.isnsest.denizen.reflect.util.LibraryLoader;
 import org.bukkit.Bukkit;
 
 import java.lang.reflect.*;
 import java.util.*;
 
-import static com.isnsest.denizen.reflect.util.JavaExpressionEngine.resolveClass;
-
 public class ProxyCommand extends AbstractCommand {
 
-    // @Plugin denizen-reflect
     public ProxyCommand() {
         setName("proxy");
         setSyntax("proxy [<interfaces>|...] (using:<map>) (as:<name>)");
@@ -57,29 +55,16 @@ public class ProxyCommand extends AbstractCommand {
             @ArgName("using") @ArgPrefixed MapTag using,
             @ArgName("as") @ArgPrefixed @ArgDefaultText("proxy") String name) {
 
+        ImportContext imports = JavaExpressionEngine.getImports(entry);
         List<Class<?>> interfaceList = new ArrayList<>();
         for (String interfaceName : interfaces) {
-            try {
-                String path = entry.getScript().getContainer().getRelativeFileName().replace("\\", "/");
-                path = path.substring(path.indexOf("scripts/") + "scripts/".length());
-                JavaExpressionEngine.ImportContext imports = JavaExpressionEngine.importContexts.get(path);
-                JavaExpressionEngine.EvalContext ctx = new JavaExpressionEngine.EvalContext(imports, entry);
-                Class<?> imported = ctx.imports().resolveType(interfaceName);
-                Class<?> clazz = null;
-                if (imported != null) {
-                    clazz = imported;
-                } else {
-                    try {
-                        clazz = resolveClass(interfaceName);
-                    } catch (ClassNotFoundException ignored) {}
-                }
-                if (clazz != null && clazz.isInterface()) {
-                    interfaceList.add(clazz);
-                } else {
-                    Debug.echoError("Class is not an interface: " + interfaceName);
-                }
-            } catch (Exception e) {
+            Class<?> clazz = imports.findClass(interfaceName);
+            if (clazz == null) {
                 Debug.echoError("Interface not found: " + interfaceName);
+            } else if (!clazz.isInterface()) {
+                Debug.echoError("Class is not an interface: " + interfaceName);
+            } else {
+                interfaceList.add(clazz);
             }
         }
 
@@ -105,80 +90,61 @@ public class ProxyCommand extends AbstractCommand {
     private record DenizenInvocationHandler(Map<String, ObjectTag> scriptHandlers,
                                             ScriptEntry creationEntry) implements InvocationHandler {
 
-            private static final Method INVOKE_DEFAULT;
-
-            static {
-                Method method;
-                try {
-                    method = InvocationHandler.class.getDeclaredMethod("invokeDefault", Object.class, Method.class, Object[].class);
-                    method.setAccessible(true);
-                } catch (NoSuchMethodException e) {
-                    method = null;
-                }
-                INVOKE_DEFAULT = method;
-            }
-
         @Override
-            public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-                String methodName = method.getName();
-                String handlerKey = methodName.toLowerCase();
-                ObjectTag scriptName = scriptHandlers.get(handlerKey);
-
-                if (scriptName == null) {
-                        if (method.isDefault() && INVOKE_DEFAULT != null) {
-                            return INVOKE_DEFAULT.invoke(this, proxy, method, args);
-                        }
-
-                    if (methodName.equals("toString") && method.getParameterCount() == 0) {
-                            return proxy.getClass().getName() + "@" + Integer.toHexString(proxy.hashCode());
-                        }
-                        if (methodName.equals("hashCode") && method.getParameterCount() == 0) {
-                            return System.identityHashCode(proxy);
-                        }
-                        if (methodName.equals("equals") && method.getParameterCount() == 1 && method.getParameterTypes()[0] == Object.class) {
-                            return proxy == args[0];
-                        }
-
-                        return null;
-                    }
-
-                ListTag definitions;
-                ListTag argsList = new ListTag();
-                if (args != null) {
-                    for (Object arg : args) {
-                        argsList.addObject(new JavaReflectedObjectTag(arg));
-                    }
-                }
-
-                if (scriptName.getJavaObject() instanceof String) {
-                    ScriptContainer container = ScriptRegistry.getScriptContainer((String) scriptName.getJavaObject());
-                    definitions = new ListTag(container.getString("definitions"));
-                    ScriptEntryData data = creationEntry.entryData.clone();
-                    Bukkit.getScheduler().runTask(DenizenReflect.getInstance(), () -> {
-                        int i = 0;
-                        InstantQueue queue = new InstantQueue("PROXY_");
-                        queue.addEntries(container.getBaseEntries(data));
-                        for (ObjectTag arg : argsList.objectForms) {
-                            try {
-                                queue.addDefinition(definitions.get(i), arg);
-                            } catch (Exception e) {
-                                queue.addDefinition(String.valueOf(i + 1), arg);
-                            }
-                            i++;
-                        }
-                        queue.addDefinition("proxy", new JavaReflectedObjectTag(proxy));
-                        queue.addDefinition("method", new ElementTag(methodName));
-                        queue.start();
-                    });
-                } else if (scriptName.getJavaObject() instanceof SectionCommand.Section section) {
-                    Bukkit.getScheduler().runTask(DenizenReflect.getInstance(), () -> {
-                        section.run(null, args);
-                    });
-                } else {
-                    Debug.echoError("Proxy handler refers to missing script: " + scriptName);
-                    return null;
-                }
-                return proxy;
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            ObjectTag handler = scriptHandlers.get(method.getName().toLowerCase());
+            if (handler == null) {
+                return invokeUnhandled(proxy, method, args);
             }
+
+            Object target = handler.getJavaObject();
+            ScriptContainer container = target instanceof String scriptName ? ScriptRegistry.getScriptContainer(scriptName) : null;
+            if (container != null) {
+                runScript(container, proxy, method.getName(), args);
+            } else if (target instanceof SectionCommand.Section section) {
+                Bukkit.getScheduler().runTask(DenizenReflect.getInstance(), () -> section.run(null, args));
+            } else {
+                Debug.echoError("Proxy handler refers to missing script: " + handler);
+                return null;
+            }
+            return proxy;
         }
+
+        private static Object invokeUnhandled(Object proxy, Method method, Object[] args) throws Throwable {
+            if (method.isDefault()) {
+                return InvocationHandler.invokeDefault(proxy, method, args);
+            }
+            String name = method.getName();
+            int count = method.getParameterCount();
+            if (name.equals("toString") && count == 0) {
+                return proxy.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(proxy));
+            }
+            if (name.equals("hashCode") && count == 0) {
+                return System.identityHashCode(proxy);
+            }
+            if (name.equals("equals") && count == 1 && method.getParameterTypes()[0] == Object.class) {
+                return proxy == args[0];
+            }
+            return null;
+        }
+
+        private void runScript(ScriptContainer container, Object proxy, String methodName, Object[] args) {
+            ListTag definitions = new ListTag(container.getString("definitions"));
+            ScriptEntryData data = creationEntry.entryData.clone();
+            Bukkit.getScheduler().runTask(DenizenReflect.getInstance(), () -> {
+                InstantQueue queue = new InstantQueue("PROXY_");
+                queue.addEntries(container.getBaseEntries(data));
+                if (args != null) {
+                    for (int i = 0; i < args.length; i++) {
+                        if (args[i] == null) continue;
+                        String definition = i < definitions.size() ? definitions.get(i) : String.valueOf(i + 1);
+                        queue.addDefinition(definition, new JavaReflectedObjectTag(args[i]));
+                    }
+                }
+                queue.addDefinition("proxy", new JavaReflectedObjectTag(proxy));
+                queue.addDefinition("method", new ElementTag(methodName));
+                queue.start();
+            });
+        }
+    }
 }

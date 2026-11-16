@@ -4,6 +4,7 @@ import com.denizenscript.denizencore.events.ScriptEvent;
 import com.denizenscript.denizencore.events.core.PreScriptReloadScriptEvent;
 import com.denizenscript.denizencore.events.core.ScriptGeneratesErrorScriptEvent;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
+import com.isnsest.denizen.reflect.engine.JavaExpressionEngine;
 import com.isnsest.denizen.reflect.util.codegen.ScriptClassRegistry;
 
 import java.io.IOException;
@@ -84,29 +85,33 @@ public class ImportManager {
 
         try {
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-            Map<String, String> map = parseImport(lines);
 
-            for (var e : map.entrySet()) {
-                try {
-                    JavaExpressionEngine.importClass(rel, e.getKey(), e.getValue());
-                }
-                catch (ClassNotFoundException ex) {
-                    Debug.echoError("Class not found: " + e.getKey() + " (file: " + rel + ")");
-                }
-                catch (Throwable ignored) {}
-            }
+            importAll(rel, parseImport(lines, "import:"), rel);
+            importAll("", parseImport(lines, "global_import:"), rel);
 
         } catch (Exception ignored) {}
     }
 
-    private static Map<String, String> parseImport(List<String> lines) {
+    private static void importAll(String path, Map<String, String> map, String file) {
+        for (var e : map.entrySet()) {
+            try {
+                JavaExpressionEngine.importClass(path, e.getKey(), e.getValue());
+            }
+            catch (ClassNotFoundException ex) {
+                Debug.echoError("Class not found: " + e.getKey() + " (file: " + file + ")");
+            }
+            catch (Throwable ignored) {}
+        }
+    }
+
+    private static Map<String, String> parseImport(List<String> lines, String header) {
 
         Map<String, String> out = new HashMap<>();
 
         int base = -1;
 
         for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).trim().equalsIgnoreCase("import:")) {
+            if (lines.get(i).trim().equalsIgnoreCase(header)) {
                 base = i;
                 break;
             }

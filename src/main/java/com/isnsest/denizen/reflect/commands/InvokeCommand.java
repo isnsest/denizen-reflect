@@ -2,16 +2,16 @@ package com.isnsest.denizen.reflect.commands;
 
 import com.denizenscript.denizencore.objects.ObjectFetcher;
 import com.denizenscript.denizencore.objects.ObjectTag;
+import com.denizenscript.denizencore.objects.core.JavaReflectedObjectTag;
 import com.denizenscript.denizencore.scripts.ScriptEntry;
 import com.denizenscript.denizencore.scripts.commands.AbstractCommand;
 import com.denizenscript.denizencore.scripts.commands.generator.*;
 import com.denizenscript.denizencore.tags.TagManager;
 import com.denizenscript.denizencore.utilities.debugging.Debug;
-import com.isnsest.denizen.reflect.util.JavaExpressionEngine;
+import com.isnsest.denizen.reflect.engine.JavaExpressionEngine;
 
 public class InvokeCommand extends AbstractCommand {
 
-    // @Plugin denizen-reflect
     public InvokeCommand() {
         setName("invoke");
         setSyntax("invoke [<java_expression>]");
@@ -75,7 +75,7 @@ public class InvokeCommand extends AbstractCommand {
     @SuppressWarnings("unused")
     public static void autoExecute(ScriptEntry scriptEntry, @ArgName("expression") @ArgLinear String expression) {
         try {
-            JavaExpressionEngine.execute(expression, scriptEntry);
+            JavaExpressionEngine.run(expression, scriptEntry);
         } catch (Exception e) {
             Debug.echoError(e.getLocalizedMessage());
         }
@@ -89,8 +89,10 @@ public class InvokeCommand extends AbstractCommand {
         // Returns the result of the expression.
         // -->
         TagManager.registerTagHandler(ObjectTag.class, "invoke", (attribute) -> {
-            String result = JavaExpressionEngine.execute(attribute.getParam(), attribute.getScriptEntry()).toString();
-            return ObjectFetcher.pickObjectFor(result, attribute.context);
+            Object result = JavaExpressionEngine.execute(attribute.getParam(), attribute.getScriptEntry());
+            if (result == null) return null;
+            if (result instanceof JavaReflectedObjectTag reflected) return reflected;
+            return ObjectFetcher.pickObjectFor(result.toString(), attribute.context);
         });
     }
 }
